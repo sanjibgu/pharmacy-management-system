@@ -19,6 +19,7 @@ import batchRoutes from './routes/batchRoutes.js'
 import purchaseLegacyRoutes from './routes/purchaseLegacyRoutes.js'
 import salesRoutes from './routes/salesRoutes.js'
 import categoryRoutes from './routes/categoryRoutes.js'
+import stockRoutes from './routes/stockRoutes.js'
 
 export function createApp() {
   const app = express()
@@ -80,6 +81,7 @@ export function createApp() {
   app.use('/api/suppliers', supplierRoutes)
   app.use('/api/batches', batchRoutes)
   app.use('/api/sales', salesRoutes)
+  app.use('/api/stocks', stockRoutes)
 
   app.use(notFound)
   app.use(errorHandler)

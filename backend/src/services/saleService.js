@@ -60,7 +60,8 @@ export async function listSaleBatches({ pharmacyId, medicineId }) {
         allowLooseSale,
       }
     })
-    .filter((i) => i.availablePacks > 0)
+    // Avoid showing "0.00" due to floating-point/rounding after loose sales.
+    .filter((i) => i.availablePacks > 1e-6)
 
   return { ok: true, items }
 }
@@ -112,6 +113,10 @@ export async function createSaleInvoice({ pharmacyId, createdBy, header, items }
       throw new Error(`Row ${idx + 1}: sale rate cannot exceed MRP`)
     }
 
+    const discountPerUnit = Math.max(0, mrp - saleRate)
+    const discountAmount = discountPerUnit * qty
+    const discountPercent = mrp > 0 ? Math.min(100, Math.max(0, (discountPerUnit / mrp) * 100)) : 0
+
     const finalPurchaseRatePack = Math.max(0, Number(stock.finalPurchaseRate || 0))
     const finalPurchaseRateUnit = unitsPerStrip > 0 ? finalPurchaseRatePack / unitsPerStrip : 0
     const finalPurchaseRate = unitType === 'unit' ? finalPurchaseRateUnit : finalPurchaseRatePack
@@ -134,6 +139,8 @@ export async function createSaleInvoice({ pharmacyId, createdBy, header, items }
         mrp,
         saleRate,
         finalPurchaseRate,
+        discountPercent,
+        discountAmount,
         amount,
         profit,
       },
@@ -142,18 +149,22 @@ export async function createSaleInvoice({ pharmacyId, createdBy, header, items }
 
   const totals = computed.reduce(
     (acc, c) => {
-      acc.net += c.item.amount
+      acc.subtotal += c.item.amount
       acc.profit += c.item.profit
       return acc
     },
-    { net: 0, profit: 0 },
+    { subtotal: 0, profit: 0 },
   )
+
+  const billDiscountPercent = Math.min(100, Math.max(0, Number(header?.billDiscountPercent || 0)))
+  const billDiscountAmount = (totals.subtotal * billDiscountPercent) / 100
+  const net = Math.max(0, totals.subtotal - billDiscountAmount)
 
   const desiredPaid =
     header && typeof header.paidAmount === 'number' ? Math.max(0, Number(header.paidAmount || 0)) : null
-  const defaultPaid = header?.paymentType === 'Credit' ? 0 : totals.net
-  const paidAmount = Math.min(totals.net, desiredPaid === null ? defaultPaid : desiredPaid)
-  const balanceAmount = Math.max(0, totals.net - paidAmount)
+  const defaultPaid = header?.paymentType === 'Credit' ? 0 : net
+  const paidAmount = Math.min(net, desiredPaid === null ? defaultPaid : desiredPaid)
+  const balanceAmount = Math.max(0, net - paidAmount)
 
   return withOptionalTransaction(async (session) => {
     const sale = await Sale.create(
@@ -162,10 +173,10 @@ export async function createSaleInvoice({ pharmacyId, createdBy, header, items }
           pharmacyId: toObjectId(pharmacyId),
           saleDate: header.saleDate || new Date(),
           paymentType: header.paymentType,
-          totalAmount: totals.net,
-          discountAmount: 0,
+          totalAmount: totals.subtotal,
+          discountAmount: billDiscountAmount,
           gstAmount: 0,
-          netAmount: totals.net,
+          netAmount: net,
           paidAmount,
           balanceAmount,
           patientName: header.patientName || '',

@@ -286,8 +286,8 @@ export default function PurchaseItemRow({
           className={inputNum}
           type="number"
           min={0}
-          value={row.mrp}
-          onChange={(e) => onChange(index, { mrp: Number(e.target.value) })}
+          value={Number(row.mrp || 0) === 0 ? '' : row.mrp}
+          onChange={(e) => onChange(index, { mrp: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
           required
         />
@@ -299,8 +299,10 @@ export default function PurchaseItemRow({
           type="number"
           min={0}
           step="0.01"
-          value={row.discountPercent}
-          onChange={(e) => onChange(index, { discountPercent: Number(e.target.value) })}
+          value={Number(row.discountPercent || 0) === 0 ? '' : row.discountPercent}
+          onChange={(e) =>
+            onChange(index, { discountPercent: e.target.value === '' ? 0 : Number(e.target.value) })
+          }
           onKeyDown={blockInvalidNumberKeys}
         />
       </td>
@@ -315,8 +317,8 @@ export default function PurchaseItemRow({
           type="number"
           min={0}
           step="0.01"
-          value={row.gstPercent}
-          onChange={(e) => onChange(index, { gstPercent: Number(e.target.value) })}
+          value={Number(row.gstPercent || 0) === 0 ? '' : row.gstPercent}
+          onChange={(e) => onChange(index, { gstPercent: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
         />
       </td>
@@ -330,8 +332,8 @@ export default function PurchaseItemRow({
           className={inputNum}
           type="number"
           min={0}
-          value={row.quantity}
-          onChange={(e) => onChange(index, { quantity: Number(e.target.value) })}
+          value={Number(row.quantity || 0) === 0 ? '' : row.quantity}
+          onChange={(e) => onChange(index, { quantity: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
           required
         />
@@ -342,8 +344,10 @@ export default function PurchaseItemRow({
           className={inputNum}
           type="number"
           min={0}
-          value={row.freeQuantity}
-          onChange={(e) => onChange(index, { freeQuantity: Number(e.target.value) })}
+          value={Number(row.freeQuantity || 0) === 0 ? '' : row.freeQuantity}
+          onChange={(e) =>
+            onChange(index, { freeQuantity: e.target.value === '' ? 0 : Number(e.target.value) })
+          }
           onKeyDown={blockInvalidNumberKeys}
         />
       </td>
@@ -357,8 +361,8 @@ export default function PurchaseItemRow({
           className={inputNum}
           type="number"
           min={0}
-          value={row.saleRate}
-          onChange={(e) => onChange(index, { saleRate: Number(e.target.value) })}
+          value={Number(row.saleRate || 0) === 0 ? '' : row.saleRate}
+          onChange={(e) => onChange(index, { saleRate: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
           required
         />

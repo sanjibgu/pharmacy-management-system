@@ -209,9 +209,22 @@ export default function SaleItemRow({ index, row, onChange, onRemove, onActivate
           className={inputNum}
           type="number"
           min={0}
+          max={100}
           step="0.01"
-          value={row.saleRate}
-          onChange={(e) => onChange(index, { saleRate: Number(e.target.value) })}
+          value={Number(row.discountPercent || 0) === 0 ? '' : row.discountPercent}
+          onChange={(e) => onChange(index, { discountPercent: e.target.value === '' ? 0 : Number(e.target.value) })}
+          onKeyDown={blockInvalidNumberKeys}
+        />
+      </td>
+
+      <td className={cell}>
+        <input
+          className={inputNum}
+          type="number"
+          min={0}
+          step="0.01"
+          value={Number(row.saleRate || 0) === 0 ? '' : row.saleRate}
+          onChange={(e) => onChange(index, { saleRate: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
           required
         />
@@ -223,8 +236,8 @@ export default function SaleItemRow({ index, row, onChange, onRemove, onActivate
           type="number"
           min={0}
           step={row.unitType === 'unit' ? '1' : '0.01'}
-          value={row.quantity}
-          onChange={(e) => onChange(index, { quantity: Number(e.target.value) })}
+          value={Number(row.quantity || 0) === 0 ? '' : row.quantity}
+          onChange={(e) => onChange(index, { quantity: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
           required
         />

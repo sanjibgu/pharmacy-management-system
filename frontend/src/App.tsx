@@ -5,9 +5,11 @@ import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import MedicinesPage from './pages/MedicinesPage'
 import PurchasePage from './pages/PurchasePage.jsx'
+import PurchasesViewPage from './pages/PurchasesViewPage'
 import SalesPage from './pages/SalesPage.jsx'
 import UsersPage from './pages/UsersPage'
 import DistributorsPage from './pages/DistributorsPage'
+import StocksPage from './pages/StocksPage'
 import SuperAdminLoginPage from './pages/SuperAdminLoginPage'
 import PendingPharmaciesPage from './pages/PendingPharmaciesPage'
 import CategoriesPage from './pages/CategoriesPage'
@@ -41,10 +43,26 @@ export default function App() {
         }
       />
       <Route
+        path="/stocks"
+        element={
+          <RequireAuth>
+            <StocksPage />
+          </RequireAuth>
+        }
+      />
+      <Route
         path="/purchases"
         element={
           <RequireAuth>
             <PurchasePage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/purchases/view"
+        element={
+          <RequireAuth>
+            <PurchasesViewPage />
           </RequireAuth>
         }
       />
@@ -116,10 +134,26 @@ export default function App() {
           }
         />
         <Route
+          path="stocks"
+          element={
+            <RequireAuth>
+              <StocksPage />
+            </RequireAuth>
+          }
+        />
+        <Route
           path="purchases"
           element={
             <RequireAuth>
               <PurchasePage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="purchases/view"
+          element={
+            <RequireAuth>
+              <PurchasesViewPage />
             </RequireAuth>
           }
         />

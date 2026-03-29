@@ -51,14 +51,22 @@ export default function SiteHeader() {
                 Dashboard
               </Link>
               {canView('medicines') ? (
-                <Link className="hover:text-slate-100" to={`${base}/medicines`}>
-                  Medicine Management
-                </Link>
+                <>
+                  <Link className="hover:text-slate-100" to={`${base}/medicines`}>
+                    Medicine Management
+                  </Link>
+                  <Link className="hover:text-slate-100" to={`${base}/stocks`}>
+                    Stocks
+                  </Link>
+                </>
               ) : null}
               {canView('purchases') ? (
                 <>
                   <Link className="hover:text-slate-100" to={`${base}/purchases`}>
                     Purchase Module
+                  </Link>
+                  <Link className="hover:text-slate-100" to={`${base}/purchases/view`}>
+                    Purchase Views
                   </Link>
                   <Link className="hover:text-slate-100" to={`${base}/distributors`}>
                     Distributor Management

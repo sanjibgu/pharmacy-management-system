@@ -30,6 +30,8 @@ const SaleItemSchema = new mongoose.Schema(
     mrp: { type: Number, required: true, min: 0, default: 0 }, // MRP per unitType
     saleRate: { type: Number, required: true, min: 0, default: 0 }, // per unitType
     finalPurchaseRate: { type: Number, required: true, min: 0, default: 0 }, // per unitType
+    discountPercent: { type: Number, required: true, min: 0, max: 100, default: 0 },
+    discountAmount: { type: Number, required: true, min: 0, default: 0 },
     amount: { type: Number, required: true, min: 0, default: 0 },
     profit: { type: Number, required: true, default: 0 },
   },
@@ -40,4 +42,3 @@ SaleItemSchema.index({ pharmacyId: 1, saleId: 1 })
 SaleItemSchema.plugin(tenantPlugin, { field: 'pharmacyId' })
 
 export const SaleItem = mongoose.model('SaleItem', SaleItemSchema)
-

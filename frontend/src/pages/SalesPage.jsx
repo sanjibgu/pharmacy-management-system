@@ -34,6 +34,7 @@ function emptyRow() {
     unitsPerStrip: 1,
     mrp: 0,
     saleRate: 0,
+    discountPercent: 0,
     finalPurchaseRate: 0,
     quantity: 0,
   }
@@ -66,6 +67,7 @@ export default function SalesPage() {
     saleDate: isoToday(),
     paymentType: 'Cash',
     paidAmount: 0,
+    billDiscountPercent: 0,
     patientName: '',
     phone: '',
     doctorName: '',
@@ -82,7 +84,25 @@ export default function SalesPage() {
 
   function updateRow(index, patch) {
     setSuccess(false)
-    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)))
+    setRows((prev) =>
+      prev.map((r, i) => {
+        if (i !== index) return r
+        const next = { ...r, ...patch }
+        const mrp = Math.max(0, Number(next.mrp || 0))
+
+        if (Object.prototype.hasOwnProperty.call(patch, 'discountPercent')) {
+          const disc = Math.min(100, Math.max(0, Number(next.discountPercent || 0)))
+          next.discountPercent = disc
+          next.saleRate = mrp > 0 ? Math.max(0, mrp - (mrp * disc) / 100) : Math.max(0, Number(next.saleRate || 0))
+        } else if (Object.prototype.hasOwnProperty.call(patch, 'saleRate')) {
+          const sr = Math.max(0, Number(next.saleRate || 0))
+          next.saleRate = sr
+          next.discountPercent = mrp > 0 ? Math.min(100, Math.max(0, ((mrp - sr) / mrp) * 100)) : 0
+        }
+
+        return next
+      }),
+    )
   }
 
   function addRow() {
@@ -102,12 +122,22 @@ export default function SalesPage() {
 
       const packQty = Math.max(0, Math.floor(Number(qty?.packQty || 0)))
       const unitQty = Math.max(0, Math.floor(Number(qty?.unitQty || 0)))
-      const quantity = allowLooseSale ? unitQty : packQty
-      if (quantity <= 0) return prev
+      const anyQty = allowLooseSale ? packQty > 0 || unitQty > 0 : packQty > 0
+      if (!anyQty) return prev
+
+      const overrideSaleRatePack =
+        qty && typeof qty.saleRatePack === 'number' ? Math.max(0, Number(qty.saleRatePack || 0)) : null
+      const effectiveSaleRatePack = overrideSaleRatePack === null ? saleRatePack : overrideSaleRatePack
+      const effectiveDisc =
+        qty && typeof qty.discountPercent === 'number'
+          ? Math.min(100, Math.max(0, Number(qty.discountPercent || 0)))
+          : mrpPack > 0
+            ? Math.min(100, Math.max(0, ((mrpPack - effectiveSaleRatePack) / mrpPack) * 100))
+            : 0
 
       function makeRow(unitType, quantity) {
         const mrp = unitType === 'unit' ? mrpPack / unitsPerStrip : mrpPack
-        const saleRate = unitType === 'unit' ? saleRatePack / unitsPerStrip : saleRatePack
+        const saleRate = unitType === 'unit' ? effectiveSaleRatePack / unitsPerStrip : effectiveSaleRatePack
         return {
           ...emptyRow(),
           medicineId: medicine._id,
@@ -121,13 +151,21 @@ export default function SalesPage() {
           unitType,
           mrp,
           saleRate,
+          discountPercent: effectiveDisc,
           finalPurchaseRate: Number(batch.finalPurchaseRate || 0),
           quantity: Math.max(1, Math.floor(Number(quantity || 1))),
         }
       }
 
-      const unitType = allowLooseSale ? 'unit' : 'pack'
-      const toAdd = [makeRow(unitType, quantity)]
+      const toAdd = []
+      if (allowLooseSale) {
+        if (packQty > 0) toAdd.push(makeRow('pack', packQty))
+        if (unitQty > 0) toAdd.push(makeRow('unit', unitQty))
+      } else if (packQty > 0) {
+        toAdd.push(makeRow('pack', packQty))
+      }
+
+      if (toAdd.length === 0) return prev
 
       const last = prev[prev.length - 1]
       const lastBlank =
@@ -137,7 +175,8 @@ export default function SalesPage() {
         !String(last.batchNumber || '').trim()
 
       if (lastBlank) {
-        const next = prev.map((r, i) => (i === prev.length - 1 ? toAdd[0] : r))
+        const replaced = prev.map((r, i) => (i === prev.length - 1 ? toAdd[0] : r))
+        const next = toAdd.length > 1 ? [...replaced, ...toAdd.slice(1)] : replaced
         setActiveRow(next.length - 1)
         return next
       }
@@ -203,8 +242,11 @@ export default function SalesPage() {
       },
       { items: 0, amount: 0, profit: 0 },
     )
-    return totals
-  }, [rows])
+    const billDiscPct = Math.min(100, Math.max(0, Number(header.billDiscountPercent || 0)))
+    const billDiscAmt = (totals.amount * billDiscPct) / 100
+    const net = Math.max(0, totals.amount - billDiscAmt)
+    return { ...totals, billDiscPct, billDiscAmt, net }
+  }, [rows, header.billDiscountPercent])
 
   async function submit(e) {
     e.preventDefault()
@@ -235,13 +277,14 @@ export default function SalesPage() {
       }
       if (!hasAny) throw new Error('Add at least one sale row')
 
-      const paid = Math.min(Math.max(0, Number(header.paidAmount || 0)), Math.max(0, Number(summary.amount || 0)))
+      const paid = Math.min(Math.max(0, Number(header.paidAmount || 0)), Math.max(0, Number(summary.net || 0)))
 
       await createSale(token, {
         header: {
           saleDate: new Date(header.saleDate),
           paymentType: header.paymentType,
           paidAmount: paid,
+          billDiscountPercent: Number(header.billDiscountPercent || 0),
           patientName: header.patientName || '',
           phone: header.phone || '',
           doctorName: header.doctorName || '',
@@ -257,6 +300,7 @@ export default function SalesPage() {
         saleDate: isoToday(),
         paymentType: 'Cash',
         paidAmount: 0,
+        billDiscountPercent: 0,
         patientName: '',
         phone: '',
         doctorName: '',
@@ -319,6 +363,7 @@ export default function SalesPage() {
                       <th className="py-0 pr-2 w-28 align-middle text-center">Exp</th>
                       <th className="py-0 pr-2 w-16 align-middle text-center">Unit</th>
                       <th className="py-0 pr-2 w-16 align-middle text-center">MRP</th>
+                      <th className="py-0 pr-2 w-16 align-middle text-center">Disc%</th>
                       <th className="py-0 pr-2 w-16 align-middle text-center">S.R</th>
                       <th className="py-0 pr-2 w-16 align-middle text-center">Qty</th>
                       <th className="py-0 pr-2 w-20 align-middle text-center">Amt</th>
@@ -403,11 +448,13 @@ export default function SalesPage() {
                       type="number"
                       min={0}
                       step="0.01"
-                      value={header.paidAmount}
+                      value={Number(header.paidAmount || 0) === 0 ? '' : header.paidAmount}
                       onKeyDown={(e) => {
                         if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
                       }}
-                      onChange={(e) => setHeader((h) => ({ ...h, paidAmount: Number(e.target.value) }))}
+                      onChange={(e) =>
+                        setHeader((h) => ({ ...h, paidAmount: e.target.value === '' ? 0 : Number(e.target.value) }))
+                      }
                     />
                   </label>
                   <label className="grid gap-1.5 col-span-12 lg:col-span-6">
@@ -480,7 +527,33 @@ export default function SalesPage() {
                     <div className="text-sm font-semibold">Summary</div>
                     <div className="flex flex-wrap items-end gap-3 text-sm text-slate-300">
                       <div>
-                        Amount: <span className="font-semibold text-slate-100">{summary.amount.toFixed(2)}</span>
+                        Subtotal: <span className="font-semibold text-slate-100">{summary.amount.toFixed(2)}</span>
+                      </div>
+                      <label className="flex items-end gap-2">
+                        <span>Bill Disc%:</span>
+                        <input
+                          className="h-9 w-24 rounded-xl bg-slate-950/40 px-3 text-sm text-slate-100 ring-1 ring-inset ring-white/10"
+                          type="number"
+                          min={0}
+                          max={100}
+                          step="0.01"
+                          value={Number(header.billDiscountPercent || 0) === 0 ? '' : header.billDiscountPercent}
+                          onKeyDown={(e) => {
+                            if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
+                          }}
+                          onChange={(e) =>
+                            setHeader((h) => ({
+                              ...h,
+                              billDiscountPercent: e.target.value === '' ? 0 : Number(e.target.value),
+                            }))
+                          }
+                        />
+                      </label>
+                      <div>
+                        Disc Amt: <span className="font-semibold text-slate-100">{summary.billDiscAmt.toFixed(2)}</span>
+                      </div>
+                      <div>
+                        Net: <span className="font-semibold text-slate-100">{summary.net.toFixed(2)}</span>
                       </div>
                       <div>
                         Profit:{' '}

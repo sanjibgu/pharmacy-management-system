@@ -10,6 +10,8 @@ import {
   deletePurchase,
   getPurchaseDetails,
   listPurchases,
+  updatePurchaseHeader,
+  updatePurchaseItems,
 } from '../controllers/purchaseController.js'
 
 const router = Router()
@@ -82,6 +84,44 @@ router.delete(
   attachPharmacyId,
   requireModuleAccess('purchases', 'manage'),
   deletePurchase,
+)
+
+const updateHeaderSchema = z
+  .object({
+    supplierId: z.string().min(1).optional(),
+    invoiceNumber: z.string().min(1).optional(),
+    invoiceDate: z.coerce.date().optional(),
+    purchaseDate: z.coerce.date().optional(),
+    paymentType: z.enum(['Cash', 'Credit', 'UPI']).optional(),
+    paidAmount: z.coerce.number().min(0).optional(),
+    dueDate: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.coerce.date().optional()),
+    remarks: z.string().optional(),
+  })
+  .refine((body) => Object.keys(body || {}).length > 0, { message: 'No fields to update' })
+
+router.put(
+  '/:id',
+  requireTenant,
+  requireAuth,
+  attachPharmacyId,
+  requireModuleAccess('purchases', 'manage'),
+  validateBody(updateHeaderSchema),
+  updatePurchaseHeader,
+)
+
+const updateItemsSchema = z.object({
+  header: updateHeaderSchema.optional(),
+  items: z.array(purchaseItemSchema).min(1),
+})
+
+router.put(
+  '/:id/items',
+  requireTenant,
+  requireAuth,
+  attachPharmacyId,
+  requireModuleAccess('purchases', 'manage'),
+  validateBody(updateItemsSchema),
+  updatePurchaseItems,
 )
 
 export default router

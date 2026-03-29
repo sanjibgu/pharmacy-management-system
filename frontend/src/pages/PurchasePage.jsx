@@ -28,6 +28,7 @@ function emptyRow() {
     hsnCode: '',
     mrp: 0,
     saleRate: 0,
+    saleRateTouched: false,
     quantity: 0,
     freeQuantity: 0,
     discountPercent: 0,
@@ -287,7 +288,34 @@ export default function PurchasePage() {
 
   function updateRow(index, patch) {
     setSuccess(false)
-    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)))
+    setRows((prev) =>
+      prev.map((r, i) => {
+        if (i !== index) return r
+
+        const next = { ...r, ...patch }
+
+        // Auto-fill S.R with MRP (until user manually overrides S.R).
+        if (Object.prototype.hasOwnProperty.call(patch, 'saleRate')) {
+          next.saleRateTouched = true
+        }
+
+        if (Object.prototype.hasOwnProperty.call(patch, 'mrp')) {
+          const prevMrp = Number(r.mrp || 0)
+          const prevSale = Number(r.saleRate || 0)
+          const nextMrp = Number(next.mrp || 0)
+
+          const shouldAuto =
+            !r.saleRateTouched || prevSale === prevMrp || prevSale === 0
+
+          if (shouldAuto) {
+            next.saleRate = nextMrp
+            next.saleRateTouched = false
+          }
+        }
+
+        return next
+      }),
+    )
   }
 
   function addMedicine() {
@@ -461,6 +489,12 @@ export default function PurchasePage() {
                 to={`${base}/medicines`}
               >
                 Add Medicine
+              </Link>
+              <Link
+                className="rounded-full bg-transparent px-4 py-2 text-sm text-slate-300 ring-1 ring-inset ring-white/10 hover:bg-white/5"
+                to={`${base}/purchases/view`}
+              >
+                Purchase Views
               </Link>
               <Link
                 className="rounded-full bg-transparent px-4 py-2 text-sm text-slate-300 ring-1 ring-inset ring-white/10 hover:bg-white/5"
@@ -773,11 +807,13 @@ export default function PurchasePage() {
                        type="number"
                        min={0}
                        step="0.01"
-                       value={header.paidAmount}
+                       value={Number(header.paidAmount || 0) === 0 ? '' : header.paidAmount}
                        onKeyDown={(e) => {
                          if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
                        }}
-                       onChange={(e) => setHeader((h) => ({ ...h, paidAmount: Number(e.target.value) }))}
+                       onChange={(e) =>
+                         setHeader((h) => ({ ...h, paidAmount: e.target.value === '' ? 0 : Number(e.target.value) }))
+                       }
                      />
                    </div>
                    <div>

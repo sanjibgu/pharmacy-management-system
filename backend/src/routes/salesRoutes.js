@@ -32,6 +32,7 @@ const createSchema = z.object({
     saleDate: z.coerce.date().optional(),
     paymentType: z.enum(['Cash', 'Credit', 'UPI']),
     paidAmount: z.coerce.number().min(0).optional(),
+    billDiscountPercent: z.coerce.number().min(0).max(100).optional(),
     patientName: z.string().max(120).optional(),
     phone: z.string().max(30).optional(),
     doctorName: z.string().max(120).optional(),
