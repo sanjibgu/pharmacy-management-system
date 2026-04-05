@@ -11,7 +11,12 @@ function isDuplicateKeyError(err) {
 
 export async function listSuppliers(req, res) {
   const pharmacyId = req.pharmacyId
-  const items = await Supplier.find({ pharmacyId }).sort({ supplierName: 1 }).lean()
+  const includeInactive =
+    String(req.query.includeInactive || '') === '1' ||
+    String(req.query.includeInactive || '').toLowerCase() === 'true'
+
+  const query = { pharmacyId, ...(includeInactive ? {} : { isActive: { $ne: false } }) }
+  const items = await Supplier.find(query).sort({ supplierName: 1 }).lean()
   res.json({ items })
 }
 
@@ -83,6 +88,21 @@ export async function updateSupplier(req, res) {
     }
     throw err
   }
+
+  if (!item) return res.status(404).json({ error: 'Distributor not found' })
+  res.json({ item })
+}
+
+export async function toggleSupplierActive(req, res) {
+  const pharmacyId = req.pharmacyId
+  const supplierId = req.params.id
+  const isActive = Boolean(req.validatedBody.isActive)
+
+  const item = await Supplier.findOneAndUpdate(
+    { _id: supplierId, pharmacyId },
+    { $set: { isActive } },
+    { new: true },
+  ).lean()
 
   if (!item) return res.status(404).json({ error: 'Distributor not found' })
   res.json({ item })

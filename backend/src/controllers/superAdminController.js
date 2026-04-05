@@ -49,6 +49,8 @@ export async function approvePharmacy(req, res) {
     pharmacy.slug = await generateUniquePharmacySlug(pharmacy.pharmacyName)
   }
   pharmacy.status = 'approved'
+  pharmacy.isActive = true
+  pharmacy.deactivationRemark = ''
   pharmacy.rejectionReason = undefined
   await pharmacy.save()
 
@@ -58,6 +60,10 @@ export async function approvePharmacy(req, res) {
     { $unset: { portalUrl: 1 } },
     { strict: false },
   )
+
+  // Global Master + Mapping:
+  // Do not seed tenant-local copies for global items/manufacturers when a pharmacy is approved.
+  // They are visible by default; pharmacy can disable via mapping settings.
 
   // Create the initial PharmacyAdmin user (idempotent)
   const existing = await User.findOne({

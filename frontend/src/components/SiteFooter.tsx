@@ -1,6 +1,12 @@
 import Container from './Container'
+import { useAuth } from '../context/AuthContext'
 
 export default function SiteFooter() {
+  const { token, user } = useAuth()
+  // Hide footer inside tenant (pharmacy) app after login to maximize workspace.
+  if (token && user?.role !== 'SuperAdmin') return null
+  if (token && !user) return null
+
   return (
     <footer className="border-t border-white/10 bg-slate-950">
       <Container>
@@ -84,4 +90,3 @@ export default function SiteFooter() {
     </footer>
   )
 }
-

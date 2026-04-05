@@ -41,7 +41,7 @@ export async function tenantResolver(req, res, next) {
 
   if (!slug) return next()
 
-  const pharmacy = await Pharmacy.findOne({ slug, status: 'approved' }).lean()
+  const pharmacy = await Pharmacy.findOne({ slug, status: 'approved', isDeleted: { $ne: true } }).lean()
   if (!pharmacy) return next()
 
   req.tenant = {
@@ -57,6 +57,11 @@ export function requireTenant(req, res, next) {
   if (!req.tenant) {
     return res.status(400).json({ error: 'Tenant not resolved for this request' })
   }
+  if (req.tenant?.pharmacy?.isActive === false) {
+    const remark = (req.tenant.pharmacy.deactivationRemark || '').toString().trim()
+    return res.status(403).json({
+      error: remark ? `Pharmacy is deactivated: ${remark}` : 'Pharmacy is deactivated',
+    })
+  }
   return next()
 }
-

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import Button from '../components/Button'
 import SiteFooter from '../components/SiteFooter'
 import SiteHeader from '../components/SiteHeader'
 import PurchaseItemRow from '../components/PurchaseItemRow'
 import { useAuth } from '../context/AuthContext'
+import { apiFetch } from '../services/api'
 import {
+  createMedicine,
   createPurchase,
   createSupplier,
   getBatches,
@@ -18,8 +20,20 @@ function isoToday() {
   return new Date().toISOString().slice(0, 10)
 }
 
+function maskExpiryDmy(value) {
+  const digits = String(value || '')
+    .replace(/\D/g, '')
+    .slice(0, 8)
+  if (!digits) return ''
+  if (digits.length <= 2) return digits
+  if (digits.length <= 4) return `${digits.slice(0, 2)}/${digits.slice(2)}`
+  return `${digits.slice(0, 2)}/${digits.slice(2, 4)}/${digits.slice(4)}`
+}
+
 function emptyRow() {
   return {
+    categoryName: '',
+    manufacturerName: '',
     productName: '',
     medicineId: '',
     batchNumber: '',
@@ -137,13 +151,29 @@ export default function PurchasePage() {
   const isLocalhost = window.location.hostname === 'localhost'
   const effectiveSlug = tenantSlug || (isLocalhost ? getTenantSlug() : null)
   const base = effectiveSlug ? `/${effectiveSlug}` : ''
-  const [tab, setTab] = useState('purchase') // purchase | distributor
   const [suppliers, setSuppliers] = useState([])
   const [loadingSuppliers, setLoadingSuppliers] = useState(true)
+  const [categories, setCategories] = useState([])
+  const [manufacturersByCategoryId, setManufacturersByCategoryId] = useState({})
   const [error, setError] = useState(null)
   const [saving, setSaving] = useState(false)
   const [success, setSuccess] = useState(false)
   const [savingDistributor, setSavingDistributor] = useState(false)
+  const [showDistributorModal, setShowDistributorModal] = useState(false)
+  const [showMedicineModal, setShowMedicineModal] = useState(false)
+  const [savingMedicine, setSavingMedicine] = useState(false)
+  const [medicineModalError, setMedicineModalError] = useState(null)
+
+  const [distributorOpen, setDistributorOpen] = useState(false)
+  const [distributorQuery, setDistributorQuery] = useState('')
+  const distributorInputRef = useRef(null)
+  const [distributorPopup, setDistributorPopup] = useState({ top: 0, left: 0, width: 0 })
+
+  const [mobileProductOpen, setMobileProductOpen] = useState(false)
+  const [mobileProductResults, setMobileProductResults] = useState([])
+  const [mobileProductHighlight, setMobileProductHighlight] = useState(0)
+  const [mobileProductPopup, setMobileProductPopup] = useState({ top: 0, left: 0, width: 0 })
+  const mobileProductRef = useRef(null)
 
   const [header, setHeader] = useState({
     supplierId: '',
@@ -152,6 +182,7 @@ export default function PurchasePage() {
     purchaseDate: isoToday(),
     purchaseType: 'Cash',
     paidAmount: 0,
+    paidAmountTouched: false,
     dueDate: '',
     remarks: '',
   })
@@ -161,6 +192,15 @@ export default function PurchasePage() {
     [suppliers, header.supplierId],
   )
 
+  const filteredSuppliers = useMemo(() => {
+    const q = String(distributorQuery || '').trim().toLowerCase()
+    if (!q) return suppliers
+    return (suppliers || []).filter((s) => {
+      const hay = `${s.supplierName || ''} ${s.dlNumber || ''}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [suppliers, distributorQuery])
+
   const canManageSuppliers = user?.role === 'PharmacyAdmin'
 
   const [distributor, setDistributor] = useState({
@@ -169,12 +209,115 @@ export default function PurchasePage() {
     address: '',
   })
 
-  const [rows, setRows] = useState([emptyRow()])
+  const [newMedicine, setNewMedicine] = useState({
+    category: '',
+    manufacturer: '',
+    medicineName: '',
+    rackLocation: '',
+    hsnCode: '',
+    gstPercent: 0,
+    allowLooseSale: false,
+  })
+  const [newMedicineCustomFields, setNewMedicineCustomFields] = useState({})
+
+  const [rows, setRows] = useState(() => Array.from({ length: 5 }, () => emptyRow()))
   const [activeRow, setActiveRow] = useState(0)
-  const active = rows[activeRow] || null
+  const active = rows[activeRow] || emptyRow()
+  const activeTotals = useMemo(() => lineTotals(active), [active])
 
   const [batchLoading, setBatchLoading] = useState(false)
   const [batches, setBatches] = useState([])
+  const previewBatch = useMemo(() => {
+    if (!active?.medicineId) return null
+    if (!Array.isArray(batches) || batches.length === 0) return null
+    const currentBatchNo = String(active?.batchNumber || '').trim()
+    if (currentBatchNo) {
+      const match = batches.find((b) => String(b?.batchNumber || '').trim() === currentBatchNo)
+      if (match) return match
+    }
+    // "Last batch" = most recently updated stock row for this medicine.
+    const last = batches.reduce((acc, b) => {
+      if (!acc) return b
+      const aT = new Date(acc.updatedAt || acc.createdAt || 0).getTime()
+      const bT = new Date(b.updatedAt || b.createdAt || 0).getTime()
+      return bT > aT ? b : acc
+    }, null)
+    return last || batches[0] || null
+  }, [active?.medicineId, active?.batchNumber, batches])
+
+  const [batchPopoverOpen, setBatchPopoverOpen] = useState(false)
+  const batchMoreBtnRef = useRef(null)
+  const [batchPopoverPos, setBatchPopoverPos] = useState({ top: 0, left: 0, width: 520 })
+
+  const applyBatchToRow = useCallback(
+    (rowIndex, batch, { setQtyIfEmpty = false } = {}) => {
+      if (!batch) return
+      const mrp = Number(batch.mrp || 0)
+      const trade = Number(batch.tradeRate || 0)
+      const discountPercent =
+        mrp > 0 && trade >= 0 && trade <= mrp ? ((mrp - trade) / mrp) * 100 : 0
+
+      const nextPatch = {
+        batchNumber: batch.batchNumber,
+        rackLocation: batch.rackLocation || '',
+        expiry: fmtExpiryValue(batch.expiryDate),
+        mrp,
+        discountPercent,
+      }
+
+      if (setQtyIfEmpty) {
+        const currentQty = Number(rows?.[rowIndex]?.quantity || 0)
+        if (!Number.isFinite(currentQty) || currentQty <= 0) nextPatch.quantity = 1
+      }
+
+      updateRow(rowIndex, nextPatch)
+    },
+    [rows, updateRow],
+  )
+
+  useEffect(() => {
+    // When a medicine is selected, auto-fill the row from the last batch (only if row fields are still blank).
+    if (!active?.medicineId) return
+    if (!previewBatch) return
+    const r = rows?.[activeRow]
+    if (!r || r.medicineId !== active.medicineId) return
+    // Autofill only when user hasn't started a specific batch entry yet.
+    // This avoids overwriting if the user already typed batch/expiry.
+    const hasBatchEntry = Boolean(String(r.batchNumber || '').trim()) || Boolean(String(r.expiry || '').trim())
+    if (hasBatchEntry) return
+    applyBatchToRow(activeRow, previewBatch, { setQtyIfEmpty: false })
+  }, [active?.medicineId, activeRow, applyBatchToRow, previewBatch, rows])
+
+  useEffect(() => {
+    if (!batchPopoverOpen) return
+
+    function updatePos() {
+      const btn = batchMoreBtnRef.current
+      if (!btn) return
+      const rect = btn.getBoundingClientRect()
+      const width = 560
+      const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.right - width))
+      const top = Math.round(rect.bottom + 8)
+      setBatchPopoverPos({ top, left, width })
+    }
+
+    updatePos()
+    window.addEventListener('scroll', updatePos, true)
+    window.addEventListener('resize', updatePos)
+    return () => {
+      window.removeEventListener('scroll', updatePos, true)
+      window.removeEventListener('resize', updatePos)
+    }
+  }, [batchPopoverOpen])
+
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.key === 'Escape') setBatchPopoverOpen(false)
+    }
+    if (!batchPopoverOpen) return
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [batchPopoverOpen])
 
   useEffect(() => {
     let mounted = true
@@ -186,16 +329,54 @@ export default function PurchasePage() {
         setSuppliers(res.items || [])
       } catch (e) {
         if (!mounted) return
-        setError(e instanceof Error ? e.message : 'Failed to load suppliers')
+        setError(e instanceof Error ? e.message : 'Failed to load distributors')
       } finally {
         if (mounted) setLoadingSuppliers(false)
       }
     }
     void load()
+    void (async () => {
+      try {
+        const res = await apiFetch('/api/categories', { token })
+        if (mounted) setCategories(res.items || [])
+      } catch {
+        if (mounted) setCategories([])
+      }
+    })()
     return () => {
       mounted = false
     }
   }, [token])
+
+  useEffect(() => {
+    // keep combobox text aligned with selected distributor
+    if (selectedSupplier?.supplierName) setDistributorQuery(selectedSupplier.supplierName)
+    else setDistributorQuery('')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [header.supplierId])
+
+  useEffect(() => {
+    if (!distributorOpen) return
+
+    function updatePopup() {
+      const el = distributorInputRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      setDistributorPopup({
+        top: Math.round(rect.bottom + 4),
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+      })
+    }
+
+    updatePopup()
+    window.addEventListener('scroll', updatePopup, true)
+    window.addEventListener('resize', updatePopup)
+    return () => {
+      window.removeEventListener('scroll', updatePopup, true)
+      window.removeEventListener('resize', updatePopup)
+    }
+  }, [distributorOpen, distributorQuery])
 
   async function reloadSuppliersAndSelect(idToSelect) {
     const res = await listSuppliers(token)
@@ -217,7 +398,7 @@ export default function PurchasePage() {
       })
       await reloadSuppliersAndSelect(res?.item?._id)
       setDistributor({ supplierName: '', dlNumber: '', address: '' })
-      setTab('purchase')
+      setShowDistributorModal(false)
       alert('Distributor added')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to add distributor')
@@ -226,12 +407,169 @@ export default function PurchasePage() {
     }
   }
 
+  async function onCreateMedicine(e) {
+    e.preventDefault()
+    if (!token) return
+    setMedicineModalError(null)
+    setSavingMedicine(true)
+    try {
+      const looseAllowed = Boolean(selectedNewMedicineCategory?.looseSaleAllowed)
+      const res = await createMedicine(token, {
+        medicineName: newMedicine.medicineName,
+        manufacturer: newMedicine.manufacturer,
+        dosageForm: '',
+        category: newMedicine.category,
+        rackLocation: newMedicine.rackLocation,
+        hsnCode: newMedicine.hsnCode,
+        gstPercent: newMedicine.gstPercent,
+        allowLooseSale: looseAllowed ? Boolean(newMedicine.allowLooseSale) : false,
+        customFields: newMedicineCustomFields,
+      })
+
+      const item = res?.item
+      if (item?._id) {
+        updateRow(activeRow, {
+          medicineId: item._id,
+          productName: item.medicineName,
+          categoryName: item.category || newMedicine.category,
+          manufacturerName: item.manufacturer || newMedicine.manufacturer,
+          rackLocation: item.rackLocation || newMedicine.rackLocation || '',
+          hsnCode: item.hsnCode || newMedicine.hsnCode || '',
+          gstPercent: Number(item.gstPercent || newMedicine.gstPercent || 0),
+        })
+      }
+
+      setNewMedicine({
+        category: '',
+        manufacturer: '',
+        medicineName: '',
+        rackLocation: '',
+        hsnCode: '',
+        gstPercent: 0,
+        allowLooseSale: false,
+      })
+      setNewMedicineCustomFields({})
+      setShowMedicineModal(false)
+      alert('Medicine added')
+    } catch (err) {
+      setMedicineModalError(err instanceof Error ? err.message : 'Failed to add medicine')
+    } finally {
+      setSavingMedicine(false)
+    }
+  }
+
   const search = useCallback(
-    async (q) => {
-      const res = await searchMedicines(token, q)
+    async (q, categoryName, manufacturerName) => {
+      const res = await searchMedicines(token, q, categoryName, manufacturerName)
       return res.items || []
     },
     [token],
+  )
+
+  const categoriesByName = useMemo(() => {
+    const m = new Map()
+    for (const c of categories || []) m.set(c.name, c._id)
+    return m
+  }, [categories])
+
+  const selectedNewMedicineCategory = useMemo(
+    () => (categories || []).find((c) => c.name === newMedicine.category) || null,
+    [categories, newMedicine.category],
+  )
+
+  function dateInputValue(v) {
+    if (!v) return ''
+    const d = v instanceof Date ? v : new Date(String(v))
+    if (Number.isNaN(d.getTime())) return ''
+    return d.toISOString().slice(0, 10)
+  }
+
+  function renderCustomFieldInput(field, value, onChange) {
+    const baseClass =
+      'h-11 w-full min-w-0 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400'
+
+    if (field.type === 'select') {
+      return (
+        <select
+          className={baseClass}
+          value={typeof value === 'string' ? value : ''}
+          onChange={(e) => onChange(e.target.value)}
+          required={Boolean(field.required)}
+        >
+          <option value="">Select</option>
+          {(field.options || []).map((o) => (
+            <option key={o} value={o}>
+              {o}
+            </option>
+          ))}
+        </select>
+      )
+    }
+
+    if (field.type === 'boolean') {
+      return (
+        <label className="flex h-11 items-center gap-3 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10">
+          <input
+            type="checkbox"
+            className="h-4 w-4 accent-sky-400"
+            checked={Boolean(value)}
+            onChange={(e) => onChange(e.target.checked)}
+          />
+          <span className="text-slate-200">Yes</span>
+        </label>
+      )
+    }
+
+    if (field.type === 'number') {
+      return (
+        <input
+          className={baseClass}
+          type="number"
+          value={value === undefined || value === null ? '' : String(value)}
+          min={typeof field.min === 'number' ? field.min : undefined}
+          max={typeof field.max === 'number' ? field.max : undefined}
+          onChange={(e) => onChange(e.target.value)}
+          required={Boolean(field.required)}
+        />
+      )
+    }
+
+    if (field.type === 'date') {
+      return (
+        <input
+          className={baseClass}
+          type="date"
+          value={dateInputValue(value)}
+          onChange={(e) => onChange(e.target.value)}
+          required={Boolean(field.required)}
+        />
+      )
+    }
+
+    return (
+      <input
+        className={baseClass}
+        value={typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value)}
+        onChange={(e) => onChange(e.target.value)}
+        required={Boolean(field.required)}
+      />
+    )
+  }
+
+  const ensureManufacturersForCategoryName = useCallback(
+    async (categoryName) => {
+      const categoryId = categoriesByName.get(categoryName)
+      if (!token) return
+      if (!categoryId) return
+      if (manufacturersByCategoryId[categoryId]) return
+      try {
+        const res = await apiFetch(`/api/manufacturers?categoryId=${encodeURIComponent(categoryId)}`, { token })
+        setManufacturersByCategoryId((prev) => ({ ...prev, [categoryId]: res.items || [] }))
+      } catch {
+        setManufacturersByCategoryId((prev) => ({ ...prev, [categoryId]: [] }))
+      }
+    },
+    [apiFetch, categoriesByName, manufacturersByCategoryId, token],
   )
 
   useEffect(() => {
@@ -286,13 +624,60 @@ export default function PurchasePage() {
     }
   }, [rows])
 
+  useEffect(() => {
+    // Default "Paid" equals Net Amount until user manually edits it.
+    setHeader((h) => {
+      if (h.paidAmountTouched) return h
+      const net = Math.max(0, Number(summary.netRounded || 0))
+      if (Number(h.paidAmount || 0) === net) return h
+      return { ...h, paidAmount: net }
+    })
+  }, [summary.netRounded])
+
   function updateRow(index, patch) {
     setSuccess(false)
+
+    if (Object.prototype.hasOwnProperty.call(patch, 'categoryName')) {
+      void ensureManufacturersForCategoryName(patch.categoryName)
+    }
+
     setRows((prev) =>
       prev.map((r, i) => {
         if (i !== index) return r
 
         const next = { ...r, ...patch }
+
+        if (
+          Object.prototype.hasOwnProperty.call(patch, 'categoryName') &&
+          String(patch.categoryName || '') !== String(r.categoryName || '')
+        ) {
+          // If user manually changed category, clear dependent fields.
+          // If category is being set as part of a product selection (medicineId/productName present),
+          // do not clear.
+          const hasSelectedMedicine =
+            Object.prototype.hasOwnProperty.call(patch, 'medicineId') ||
+            Object.prototype.hasOwnProperty.call(patch, 'productName') ||
+            Object.prototype.hasOwnProperty.call(patch, 'manufacturerName')
+
+          if (!hasSelectedMedicine) {
+            next.manufacturerName = ''
+            next.medicineId = ''
+            next.productName = ''
+          }
+        }
+
+        if (
+          Object.prototype.hasOwnProperty.call(patch, 'manufacturerName') &&
+          String(patch.manufacturerName || '') !== String(r.manufacturerName || '')
+        ) {
+          const hasSelectedMedicine =
+            Object.prototype.hasOwnProperty.call(patch, 'medicineId') ||
+            Object.prototype.hasOwnProperty.call(patch, 'productName')
+          if (!hasSelectedMedicine) {
+            next.medicineId = ''
+            next.productName = ''
+          }
+        }
 
         // Auto-fill S.R with MRP (until user manually overrides S.R).
         if (Object.prototype.hasOwnProperty.call(patch, 'saleRate')) {
@@ -316,6 +701,66 @@ export default function PurchasePage() {
         return next
       }),
     )
+  }
+
+  useEffect(() => {
+    if (!mobileProductOpen) return
+    const q = String(active?.productName || '').trim()
+    const t = setTimeout(async () => {
+      try {
+        if (q.length < 2) {
+          setMobileProductResults([])
+          setMobileProductHighlight(0)
+          return
+        }
+        const items = await search(q, active?.categoryName || '', active?.manufacturerName || '')
+        setMobileProductResults(items || [])
+        setMobileProductHighlight(0)
+      } catch {
+        setMobileProductResults([])
+        setMobileProductHighlight(0)
+      }
+    }, 200)
+    return () => clearTimeout(t)
+  }, [mobileProductOpen, active?.productName, active?.categoryName, active?.manufacturerName, search])
+
+  useEffect(() => {
+    if (!mobileProductOpen) return
+    function updatePopup() {
+      const el = mobileProductRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      setMobileProductPopup({
+        top: Math.round(rect.bottom + 4),
+        left: Math.round(rect.left),
+        width: Math.round(rect.width),
+      })
+    }
+    updatePopup()
+    window.addEventListener('scroll', updatePopup, true)
+    window.addEventListener('resize', updatePopup)
+    return () => {
+      window.removeEventListener('scroll', updatePopup, true)
+      window.removeEventListener('resize', updatePopup)
+    }
+  }, [mobileProductOpen, activeRow])
+
+  function blockInvalidNumberKeys(e) {
+    if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
+  }
+
+  function selectMobileMedicine(m) {
+    if (!m) return
+    setMobileProductOpen(false)
+    updateRow(activeRow, {
+      medicineId: m._id,
+      productName: m.medicineName,
+      categoryName: m.category || active?.categoryName || '',
+      manufacturerName: m.manufacturer || active?.manufacturerName || '',
+      rackLocation: active?.rackLocation ? active.rackLocation : (m.rackLocation || ''),
+      hsnCode: m.hsnCode || '',
+      gstPercent: Number(m.gstPercent || 0),
+    })
   }
 
   function addMedicine() {
@@ -347,10 +792,11 @@ export default function PurchasePage() {
       purchaseDate: isoToday(),
       purchaseType: 'Cash',
       paidAmount: 0,
+      paidAmountTouched: false,
       dueDate: '',
       remarks: '',
     })
-    setRows([emptyRow()])
+    setRows(Array.from({ length: 5 }, () => emptyRow()))
     setActiveRow(0)
     setSuccess(false)
     setError(null)
@@ -375,7 +821,6 @@ export default function PurchasePage() {
       }
 
       const items = []
-      let hasAnyRow = false
 
       const paid = Math.min(
         Math.max(0, Number(header.paidAmount || 0)),
@@ -384,13 +829,13 @@ export default function PurchasePage() {
 
       for (let idx = 0; idx < rows.length; idx += 1) {
         const r = rows[idx]
-        const hasData =
-          String(r.productName || '').trim() ||
-          String(r.batchNumber || '').trim() ||
-          String(r.expiry || '').trim()
-        if (!hasData) continue
+        const hasProduct = Boolean(r.medicineId) || Boolean(String(r.productName || '').trim())
+        // Only validate rows where a product is selected/filled.
+        // Default empty rows should never block saving.
+        if (!hasProduct) continue
 
-        hasAnyRow = true
+        const qty = Number(r.quantity || 0)
+        if (!Number.isFinite(qty) || qty <= 0) throw new Error(`Row ${idx + 1}: enter quantity`)
 
         let medicineId = r.medicineId
         if (!medicineId) {
@@ -418,12 +863,12 @@ export default function PurchasePage() {
           tradeRate: Number.isFinite(t.tradeRate) ? t.tradeRate : 0,
           purchaseRate: Number.isFinite(t.purchaseRate) ? t.purchaseRate : 0,
           saleRate: Number(r.saleRate || 0),
-          quantity: Number(r.quantity || 0),
+          quantity: qty,
           freeQuantity: Number(r.freeQuantity || 0),
         })
       }
 
-      if (!hasAnyRow) throw new Error('Add at least one medicine row')
+      if (items.length === 0) throw new Error('Add at least one medicine row')
 
       await createPurchase(token, {
         header: {
@@ -451,36 +896,20 @@ export default function PurchasePage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <SiteHeader />
-      <main className="py-8">
-        <div className="mx-auto w-full px-6">
+      <main className="py-4">
+        <div className="mx-auto w-full px-4 sm:px-6">
+          {/*
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-[220px]">
               <div className="text-lg font-semibold tracking-tight">Purchase Module</div>
-              <div className="mt-0.5 text-xs text-slate-400">Batch based entry â€¢ Role: {user?.role}</div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => setTab('purchase')}
-                className={[
-                  'rounded-full px-4 py-2 text-sm ring-1 ring-inset',
-                  tab === 'purchase'
-                    ? 'bg-white/10 text-slate-100 ring-white/15'
-                    : 'bg-transparent text-slate-300 ring-white/10 hover:bg-white/5',
-                ].join(' ')}
-              >
-                Purchase Entry
-              </button>
-              <button
-                type="button"
-                onClick={() => setTab('distributor')}
-                className={[
-                  'rounded-full px-4 py-2 text-sm ring-1 ring-inset',
-                  tab === 'distributor'
-                    ? 'bg-white/10 text-slate-100 ring-white/15'
-                    : 'bg-transparent text-slate-300 ring-white/10 hover:bg-white/5',
-                ].join(' ')}
+                onClick={() => setShowDistributorModal(true)}
+                disabled={!canManageSuppliers}
+                className="rounded-full bg-white/10 px-4 py-2 text-sm text-slate-100 ring-1 ring-inset ring-white/15 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Add Distributor
               </button>
@@ -508,9 +937,10 @@ export default function PurchasePage() {
               Back
             </Link>
           </div>
+          */}
 
           {error ? (
-            <div className="mt-4 rounded-2xl bg-rose-500/10 p-4 text-sm text-rose-200 ring-1 ring-inset ring-rose-400/20">
+            <div className="rounded-2xl bg-rose-500/10 p-4 text-sm text-rose-200 ring-1 ring-inset ring-rose-400/20">
               {error}
             </div>
           ) : null}
@@ -522,7 +952,7 @@ export default function PurchasePage() {
           ) : null}
 
           <div className="mt-6 grid gap-6">
-            {tab === 'distributor' ? (
+            {false ? (
               <form
                 onSubmit={onCreateDistributor}
                 className="rounded-3xl bg-white/5 p-6 ring-1 ring-inset ring-white/10"
@@ -575,44 +1005,88 @@ export default function PurchasePage() {
                 </div>
 
                 <div className="mt-5 flex justify-end gap-2">
-                  <Button type="button" variant="secondary" onClick={() => setTab('purchase')}>
+                  <Button type="button" variant="secondary" onClick={() => setShowDistributorModal(false)}>
                     Back
                   </Button>
                   <Button
                     type="submit"
                     disabled={!canManageSuppliers || savingDistributor}
                   >
-                    {savingDistributor ? 'Saving…' : 'Save Distributor'}
+                    {savingDistributor ? 'Saving...' : 'Save Distributor'}
                   </Button>
                 </div>
               </form>
             ) : null}
 
-            {tab === 'purchase' ? (
-              <form onSubmit={submit} className="grid gap-6">
-            <div className="rounded-3xl bg-white/5 p-6 ring-1 ring-inset ring-white/10">
-              <div className="text-sm font-semibold">Supplier Details</div>
-              <div className="mt-4 grid grid-cols-12 items-end gap-3">
-                <label className="grid gap-1.5 col-span-12 lg:col-span-4">
-                  <span className="text-sm font-medium text-slate-200">Supplier Name</span>
-                  <select
-                    className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
-                    value={header.supplierId}
-                    onChange={(e) => setHeader((h) => ({ ...h, supplierId: e.target.value }))}
-                    required
+            {true ? (
+              <form onSubmit={submit} className="grid gap-1.5">
+                <div className="flex items-end justify-between gap-6">
+                  <div>
+                    <div className="text-xl font-semibold tracking-tight">Purchase Entry</div>
+                  </div>
+                </div>
+            <div className="relative isolate z-30 rounded-2xl bg-white/5 p-3 ring-1 ring-inset ring-white/10">
+              <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 lg:grid-cols-12">
+                <label className="grid gap-1.5 sm:col-span-2 lg:col-span-4">
+                  <span className="text-sm font-medium text-slate-200">
+                    Distributor Name{' '}
+                    {canManageSuppliers ? (
+                      <button
+                        type="button"
+                        className="ml-2 text-xs text-sky-300 hover:text-sky-200"
+                        onClick={() => setShowDistributorModal(true)}
+                      >
+                        + Add
+                      </button>
+                    ) : null}
+                  </span>
+                  <input
+                    ref={distributorInputRef}
+                    className="h-11 w-full rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                    value={distributorQuery}
+                    onChange={(e) => {
+                      setDistributorQuery(e.target.value)
+                      setDistributorOpen(true)
+                      if (header.supplierId) setHeader((h) => ({ ...h, supplierId: '' }))
+                    }}
+                    onFocus={() => setDistributorOpen(true)}
+                    onBlur={() => setTimeout(() => setDistributorOpen(false), 150)}
+                    placeholder={loadingSuppliers ? 'Loading...' : 'Search distributor...'}
                     disabled={loadingSuppliers}
-                  >
-                    <option value="">{loadingSuppliers ? 'Loading…' : 'Select supplier'}</option>
-                    {suppliers.map((s) => (
-                      <option key={s._id} value={s._id}>
-                        {s.supplierName}
-                      </option>
-                    ))}
-                  </select>
+                    required
+                  />
+
+                  {distributorOpen ? (
+                    <div
+                      className="fixed z-[999999] max-h-64 overflow-auto rounded-xl bg-slate-950 p-1 ring-1 ring-inset ring-white/10 shadow-2xl"
+                      style={{ top: distributorPopup.top, left: distributorPopup.left, width: distributorPopup.width }}
+                    >
+                      {(filteredSuppliers || []).length ? (
+                        filteredSuppliers.slice(0, 50).map((s) => (
+                          <button
+                            key={s._id}
+                            type="button"
+                            className="block w-full rounded-lg px-3 py-2 text-left text-sm text-slate-200 hover:bg-white/5"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setHeader((h) => ({ ...h, supplierId: s._id }))
+                              setDistributorQuery(s.supplierName || '')
+                              setDistributorOpen(false)
+                            }}
+                          >
+                            <div className="font-medium">{s.supplierName}</div>
+                            <div className="text-xs text-slate-500">{s.dlNumber ? `DL ${s.dlNumber}` : ''}</div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="px-3 py-2 text-sm text-slate-200">No distributor found.</div>
+                      )}
+                    </div>
+                  ) : null}
                 </label>
 
                 <label className="hidden">
-                  <span className="text-sm font-medium text-slate-200">Supplier Code</span>
+                  <span className="text-sm font-medium text-slate-200">Distributor Code</span>
                   <input className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10" value={selectedSupplier?.supplierCode || ''} readOnly />
                 </label>
 
@@ -621,7 +1095,7 @@ export default function PurchasePage() {
                   <input className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10" value={selectedSupplier?.gstNumber || ''} readOnly />
                 </label>
 
-                <label className="grid gap-1.5 col-span-6 sm:col-span-3 lg:col-span-2">
+                <label className="grid gap-1.5 lg:col-span-2">
                   <span className="text-xs font-medium text-slate-300">DL No</span>
                   <input className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10" value={selectedSupplier?.dlNumber || ''} readOnly />
                 </label>
@@ -631,17 +1105,17 @@ export default function PurchasePage() {
                   <input className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10" value={selectedSupplier?.mobileNumber || ''} readOnly />
                 </label>
 
-                <label className="grid gap-1.5 col-span-6 sm:col-span-3 lg:col-span-2">
+                <label className="grid gap-1.5 lg:col-span-2">
                   <span className="text-xs font-medium text-slate-300">Invoice No</span>
                   <input className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400" value={header.invoiceNumber} onChange={(e) => setHeader((h) => ({ ...h, invoiceNumber: e.target.value }))} required />
                 </label>
 
-                <label className="grid gap-1.5 col-span-6 sm:col-span-3 lg:col-span-2">
+                <label className="grid gap-1.5 lg:col-span-2">
                   <span className="text-xs font-medium text-slate-300">Invoice Date</span>
                   <input className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400" type="date" value={header.invoiceDate} onChange={(e) => setHeader((h) => ({ ...h, invoiceDate: e.target.value }))} required />
                 </label>
 
-                <label className="grid gap-1.5 col-span-6 sm:col-span-3 lg:col-span-2">
+                <label className="grid gap-1.5 lg:col-span-2">
                   <span className="text-xs font-medium text-slate-300">Type</span>
                   <select className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400" value={header.purchaseType} onChange={(e) => setHeader((h) => ({ ...h, purchaseType: e.target.value }))} required>
                     <option value="Cash">Cash</option>
@@ -652,38 +1126,400 @@ export default function PurchasePage() {
               </div>
             </div>
 
+            <div className="grid gap-6">
             <div className="rounded-3xl bg-white/5 p-6 ring-1 ring-inset ring-white/10">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="text-sm font-semibold">Medicine Entry</div>
-                  <div className="flex gap-2">
-                    <Button type="button" variant="secondary" onClick={addMedicine}>
-                      Add Medicine
-                    </Button>
-                    <Button type="button" variant="secondary" onClick={removeMedicine} disabled={rows.length <= 1}>
-                      Remove Medicine
-                    </Button>
+                <div className="grid grid-cols-1 items-center gap-3 md:grid-cols-[auto,1fr,auto]">
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-semibold">Medicine Entry</div>
+                    <button
+                      type="button"
+                      className="h-7 rounded-lg bg-white/5 px-2 text-xs text-slate-200 ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                      onClick={() => setShowMedicineModal(true)}
+                      title="Add item"
+                      aria-label="Add item"
+                    >
+                      + Add item
+                    </button>
+                  </div>
+
+                  <div className="min-w-0 px-2">
+                    <div className="flex items-center justify-center gap-2 text-[11px] text-slate-400 whitespace-nowrap overflow-x-auto [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                      <span className="font-semibold text-slate-200">Batch Info</span>
+                      <span className="text-slate-500">-</span>
+                      {active?.medicineId ? (
+                        <span>
+                          <span className="text-slate-200">
+                            {String(active.productName || '').trim() ? active.productName : 'Selected item'}
+                          </span>{' '}
+                          <span className="text-slate-500">
+                            ({batches.length} batch{batches.length === 1 ? '' : 'es'})
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">No item selected</span>
+                      )}
+                      {active?.medicineId && previewBatch ? (
+                        <>
+                          <span className="text-slate-500">-</span>
+                          <span>
+                            Batch <span className="text-slate-200">{previewBatch.batchNumber}</span> | Exp{' '}
+                            <span className="text-slate-200">{fmtExpiryLabel(previewBatch.expiryDate)}</span> | Stock{' '}
+                            <span className="text-slate-200">{previewBatch.quantity}</span> | MRP{' '}
+                            <span className="text-slate-200">{Number(previewBatch.mrp || 0).toFixed(2)}</span> | Purchase{' '}
+                            <span className="text-slate-200">
+                              {Number(previewBatch.purchaseRate || 0).toFixed(2)}
+                            </span>
+                          </span>
+                          <button
+                            ref={batchMoreBtnRef}
+                            type="button"
+                            className="text-sky-300 underline underline-offset-2 hover:text-sky-200"
+                            onClick={() => {
+                              setBatchPopoverOpen((v) => !v)
+                            }}
+                          >
+                            More
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2">
+                    <button
+                      type="button"
+                      onClick={addMedicine}
+                      title="Add medicine row"
+                      aria-label="Add medicine row"
+                      className="h-9 w-9 rounded-lg bg-white/5 text-base font-semibold text-slate-200 ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                    >
+                      +
+                    </button>
+                    <button
+                      type="button"
+                      onClick={removeMedicine}
+                      disabled={rows.length <= 1}
+                      title="Remove medicine row"
+                      aria-label="Remove medicine row"
+                      className="h-9 w-9 rounded-lg bg-white/5 text-base font-semibold text-slate-200 ring-1 ring-inset ring-white/10 hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      -
+                    </button>
                   </div>
                 </div>
 
-                <div className="mt-4 overflow-x-auto overflow-y-visible">
-                  <table className="w-full min-w-[1100px] table-fixed text-left text-xs">
+                <div className="mt-4 md:hidden">
+                  <div className="grid gap-3">
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Category</span>
+                      <select
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                        value={active.categoryName || ''}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setMobileProductOpen(false)
+                          setMobileProductResults([])
+                          updateRow(activeRow, { categoryName: next, manufacturerName: '', medicineId: '', productName: '' })
+                        }}
+                      >
+                        <option value="">Select category</option>
+                        {(categories || []).map((c) => (
+                          <option key={c._id} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Manufacturer (optional)</span>
+                      <select
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400 disabled:opacity-60"
+                        value={active.manufacturerName || ''}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setMobileProductOpen(false)
+                          setMobileProductResults([])
+                          updateRow(activeRow, { manufacturerName: next, medicineId: '', productName: '' })
+                        }}
+                        disabled={!active.categoryName}
+                      >
+                        <option value="">{active.categoryName ? 'Select manufacturer' : 'Select category first'}</option>
+                        {(active.categoryName
+                          ? manufacturersByCategoryId[categoriesByName.get(active.categoryName)] || []
+                          : []
+                        ).map((m) => (
+                          <option key={m._id || m.name} value={m.name}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Product</span>
+                      <input
+                        ref={mobileProductRef}
+                        className="h-11 w-full rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                        value={active.productName || ''}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          updateRow(activeRow, { productName: next, medicineId: '' })
+                          setMobileProductOpen(true)
+                        }}
+                        onFocus={() => setMobileProductOpen(true)}
+                        onBlur={() => setTimeout(() => setMobileProductOpen(false), 150)}
+                        placeholder={active.categoryName ? 'Search product...' : 'Select category first'}
+                        disabled={!active.categoryName}
+                      />
+                      {mobileProductOpen ? (
+                        <div
+                          className="fixed z-[999999] max-h-72 overflow-auto rounded-xl bg-slate-950 p-1 ring-1 ring-inset ring-white/10 shadow-2xl"
+                          style={{
+                            top: mobileProductPopup.top,
+                            left: mobileProductPopup.left,
+                            width: mobileProductPopup.width,
+                          }}
+                        >
+                          {(mobileProductResults || []).length ? (
+                            (mobileProductResults || []).slice(0, 60).map((m, i) => (
+                              <button
+                                key={m._id}
+                                type="button"
+                                className={[
+                                  'block w-full rounded-lg px-3 py-2 text-left',
+                                  i === mobileProductHighlight ? 'bg-white/5' : 'hover:bg-white/5',
+                                ].join(' ')}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => selectMobileMedicine(m)}
+                              >
+                                <div className="text-sm font-medium text-slate-100">{m.medicineName}</div>
+                                <div className="text-xs text-slate-500">
+                                  {(m.manufacturer ? `${m.manufacturer}` : '') + (m.category ? ` - ${m.category}` : '')}
+                                  {m.rackLocation ? ` - Rack ${m.rackLocation}` : ''}
+                                  {m.hsnCode ? ` - HSN ${m.hsnCode}` : ''}
+                                </div>
+                              </button>
+                            ))
+                          ) : (
+                            <div className="px-3 py-2 text-sm text-slate-200">
+                              Not found. Please add item first.
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Batch Number</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        value={active.batchNumber || ''}
+                        onChange={(e) => updateRow(activeRow, { batchNumber: e.target.value })}
+                        placeholder="Batch"
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Rack</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        value={active.rackLocation || ''}
+                        onChange={(e) => updateRow(activeRow, { rackLocation: e.target.value })}
+                        placeholder="Rack"
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Expiry (DD/MM/YYYY)</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        value={active.expiry || ''}
+                        onChange={(e) => updateRow(activeRow, { expiry: maskExpiryDmy(e.target.value) })}
+                        placeholder="DD/MM/YYYY"
+                      />
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="date"
+                        value={(() => {
+                          const d = parseExpiryToDate(active.expiry)
+                          return d ? d.toISOString().slice(0, 10) : ''
+                        })()}
+                        onChange={(e) => updateRow(activeRow, { expiry: fmtExpiryValue(e.target.value) })}
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">MRP</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        onKeyDown={blockInvalidNumberKeys}
+                        value={Number(active.mrp || 0) === 0 ? '' : active.mrp}
+                        onChange={(e) => updateRow(activeRow, { mrp: Number(e.target.value || 0) })}
+                        placeholder="MRP"
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Disc%</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.01"
+                        onKeyDown={blockInvalidNumberKeys}
+                        value={Number(active.discountPercent || 0) === 0 ? '' : active.discountPercent}
+                        onChange={(e) => updateRow(activeRow, { discountPercent: Number(e.target.value || 0) })}
+                        placeholder="Discount %"
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">GST%</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        onKeyDown={blockInvalidNumberKeys}
+                        value={Number(active.gstPercent || 0) === 0 ? '' : active.gstPercent}
+                        onChange={(e) => updateRow(activeRow, { gstPercent: Number(e.target.value || 0) })}
+                        placeholder="GST %"
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Qty</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        step="1"
+                        onKeyDown={blockInvalidNumberKeys}
+                        value={Number(active.quantity || 0) === 0 ? '' : active.quantity}
+                        onChange={(e) => updateRow(activeRow, { quantity: Number(e.target.value || 0) })}
+                        placeholder="Quantity"
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Free</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        step="1"
+                        onKeyDown={blockInvalidNumberKeys}
+                        value={Number(active.freeQuantity || 0) === 0 ? '' : active.freeQuantity}
+                        onChange={(e) => updateRow(activeRow, { freeQuantity: Number(e.target.value || 0) })}
+                        placeholder="Free"
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">S.R</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        onKeyDown={blockInvalidNumberKeys}
+                        value={Number(active.saleRate || 0) === 0 ? '' : active.saleRate}
+                        onChange={(e) => updateRow(activeRow, { saleRateTouched: true, saleRate: Number(e.target.value || 0) })}
+                        placeholder="Sale rate"
+                      />
+                    </label>
+
+                    <div className="rounded-2xl bg-black/20 p-3 text-xs text-slate-300 ring-1 ring-inset ring-white/10">
+                      <div className="flex flex-wrap gap-x-4 gap-y-1">
+                        <div>
+                          T.R <span className="tabular-nums text-slate-100">{Number(activeTotals.tradeRate || 0).toFixed(2)}</span>
+                        </div>
+                        <div>
+                          P.R <span className="tabular-nums text-slate-100">{Number(activeTotals.purchaseRate || 0).toFixed(2)}</span>
+                        </div>
+                        <div>
+                          Final <span className="tabular-nums text-slate-100">{Number(activeTotals.finalPurchaseRate || 0).toFixed(2)}</span>
+                        </div>
+                        <div>
+                          Amt <span className="tabular-nums text-slate-100">{Number(activeTotals.netAmount || 0).toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl bg-slate-950/40 p-3 text-xs text-slate-400 ring-1 ring-inset ring-white/10">
+                      Added items: {(rows || []).filter((r) => Boolean(r.medicineId) || Boolean(String(r.productName || '').trim())).length}
+                    </div>
+                  </div>
+
+                  {(rows || []).some((r) => Boolean(r.medicineId) || Boolean(String(r.productName || '').trim())) ? (
+                    <div className="mt-3 space-y-2">
+                      {(rows || [])
+                        .map((r, i) => ({ r, i }))
+                        .filter(({ r }) => Boolean(r.medicineId) || Boolean(String(r.productName || '').trim()))
+                        .map(({ r, i }) => (
+                          <div
+                            key={i}
+                            className={`rounded-2xl bg-slate-950/40 p-3 ring-1 ring-inset ring-white/10 ${i === activeRow ? 'ring-sky-400/40' : ''}`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-semibold text-slate-100">{r.productName || 'Item'}</div>
+                                <div className="mt-0.5 truncate text-xs text-slate-400">
+                                  {(r.batchNumber ? `Batch ${r.batchNumber}` : '') + (r.expiry ? ` - Exp ${r.expiry}` : '')}
+                                </div>
+                              </div>
+                              <div className="text-right text-xs text-slate-400">
+                                Qty <span className="tabular-nums text-slate-100">{Number(r.quantity || 0)}</span>
+                              </div>
+                            </div>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                className="rounded-xl bg-white/5 px-3 py-2 text-xs text-slate-200 ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                                onClick={() => setActiveRow(i)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="rounded-xl bg-rose-500/10 px-3 py-2 text-xs text-rose-200 ring-1 ring-inset ring-rose-400/20 hover:bg-rose-500/15"
+                                onClick={() => removeRow(i)}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="mt-4 hidden md:block overflow-x-hidden overflow-y-visible">
+                  <table className="w-full table-fixed text-left text-xs">
                     <thead className="sticky top-0 z-10 bg-slate-950/80 uppercase tracking-wide text-slate-400 backdrop-blur">
                       <tr className="h-9">
-                        <th className="py-0 pr-2 w-64 align-middle">Product</th>
-                        <th className="py-0 pr-2 w-28 align-middle text-center">Batch</th>
-                        <th className="py-0 pr-2 w-14 align-middle text-center">Rack</th>
-                        <th className="py-0 pr-2 w-32 align-middle text-center">Exp</th>
-                        <th className="py-0 pr-2 w-16 align-middle text-center">MRP</th>
-                        <th className="py-0 pr-2 w-14 align-middle text-center">Disc%</th>
-                        <th className="py-0 pr-2 w-16 align-middle text-center">T.R</th>
-                        <th className="py-0 pr-2 w-14 align-middle text-center">GST%</th>
-                        <th className="py-0 pr-2 w-16 align-middle text-center">P.R</th>
-                        <th className="py-0 pr-2 w-14 align-middle text-center">Qty</th>
-                        <th className="py-0 pr-2 w-14 align-middle text-center">Free</th>
-                        <th className="py-0 pr-2 w-20 align-middle text-center">Final</th>
-                        <th className="py-0 pr-2 w-16 align-middle text-center">S.R</th>
-                        <th className="py-0 pr-2 w-20 align-middle text-center">Amt</th>
-                        <th className="py-0 pr-2 w-10 align-middle"></th>
+                        <th className="py-0 pr-1 w-24 align-middle">Cat</th>
+                        <th className="py-0 pr-1 w-28 align-middle">Mfg</th>
+                        <th className="py-0 pr-1 w-40 align-middle">Product</th>
+                        <th className="py-0 pr-1 w-16 align-middle text-center">Batch</th>
+                        <th className="py-0 pr-1 w-10 align-middle text-center">Rack</th>
+                        <th className="py-0 pr-1 w-20 align-middle text-center">Exp</th>
+                        <th className="py-0 pr-1 w-12 align-middle text-center">MRP</th>
+                        <th className="py-0 pr-1 w-10 align-middle text-center">Disc</th>
+                        <th className="py-0 pr-1 w-12 align-middle text-center">T.R</th>
+                        <th className="py-0 pr-1 w-10 align-middle text-center">GST</th>
+                        <th className="py-0 pr-1 w-12 align-middle text-center">P.R</th>
+                        <th className="py-0 pr-1 w-10 align-middle text-center">Qty</th>
+                        <th className="py-0 pr-1 w-10 align-middle text-center">Free</th>
+                        <th className="py-0 pr-1 w-12 align-middle text-center">Final</th>
+                        <th className="py-0 pr-1 w-12 align-middle text-center">S.R</th>
+                        <th className="py-0 pr-1 w-12 align-middle text-center">Amt</th>
+                        <th className="py-0 pr-1 w-7 align-middle"></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -696,142 +1532,122 @@ export default function PurchasePage() {
                             onRemove={() => removeRow(idx)}
                             onActivate={setActiveRow}
                             search={search}
+                            categories={categories}
+                            manufacturers={
+                              row.categoryName
+                                ? manufacturersByCategoryId[categoriesByName.get(row.categoryName)] || []
+                                : []
+                            }
+                            ensureManufacturers={ensureManufacturersForCategoryName}
                           />
                         ))}
                     </tbody>
                   </table>
                 </div>
+
               </div>
 
-            <div className="grid gap-6 lg:grid-cols-12">
-              <div className="lg:col-span-4 rounded-3xl bg-white/5 p-6 ring-1 ring-inset ring-white/10">
-                <div className="text-sm font-semibold">Batch Information</div>
-                <p className="mt-2 text-sm text-slate-400">Select a medicine row to view existing batches and stock.</p>
-
-                {!active?.medicineId ? (
-                  <div className="mt-4 text-sm text-slate-500">No medicine selected.</div>
-                ) : batchLoading ? (
-                  <div className="mt-4 text-sm text-slate-400">Loading batches…</div>
-                ) : batches.length === 0 ? (
-                  <div className="mt-4 text-sm text-slate-500">No batches found for this medicine.</div>
-                ) : (
-                  <div className="mt-4 space-y-3">
-                    {batches.map((b) => (
-                      <button
-                        key={b._id}
-                        type="button"
-                        className="w-full rounded-2xl bg-slate-950/40 p-4 text-left ring-1 ring-inset ring-white/10 hover:bg-white/5"
-                        onClick={() => {
-                          const mrp = Number(b.mrp || 0)
-                          const trade = Number(b.tradeRate || 0)
-                          const discountPercent = mrp > 0 && trade >= 0 && trade <= mrp ? ((mrp - trade) / mrp) * 100 : 0
-                          updateRow(activeRow, {
-                            batchNumber: b.batchNumber,
-                            rackLocation: b.rackLocation || '',
-                            expiry: fmtExpiryValue(b.expiryDate),
-                            mrp: Number(b.mrp || 0),
-                            discountPercent,
-                            saleRate: Number(b.saleRate || 0),
-                            quantity: 1,
-                            freeQuantity: 0,
-                          })
-                        }}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold">{b.batchNumber}</div>
-                          <div className="text-xs text-slate-400">{fmtExpiryLabel(b.expiryDate)}</div>
-                        </div>
-                        <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-300">
-                          <div>Stock: <span className="text-slate-100">{b.quantity}</span></div>
-                          <div>Free: <span className="text-slate-100">{b.freeQuantity}</span></div>
-                          <div>MRP: <span className="text-slate-100">{Number(b.mrp || 0).toFixed(2)}</span></div>
-                          <div>Sale: <span className="text-slate-100">{Number(b.saleRate || 0).toFixed(2)}</span></div>
-                          <div>Purchase: <span className="text-slate-100">{Number(b.purchaseRate || 0).toFixed(2)}</span></div>
-                          <div>Trade: <span className="text-slate-100">{Number(b.tradeRate || 0).toFixed(2)}</span></div>
-                        </div>
-                      </button>
-                    ))}
+              <div className="rounded-3xl bg-white/5 p-4 ring-1 ring-inset ring-white/10">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <div className="md:hidden grid grid-cols-2 gap-2 text-xs">
+                  <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                    <div className="text-slate-500">Items</div>
+                    <div className="mt-0.5 tabular-nums text-slate-200">{summary.items}</div>
                   </div>
-                )}
-              </div>
+                  <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                    <div className="text-slate-500">Qty</div>
+                    <div className="mt-0.5 tabular-nums text-slate-200">{summary.qty}</div>
+                  </div>
+                  <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                    <div className="text-slate-500">Gross</div>
+                    <div className="mt-0.5 tabular-nums text-slate-200">{summary.gross.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                    <div className="text-slate-500">Disc</div>
+                    <div className="mt-0.5 tabular-nums text-slate-200">{summary.discount.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                    <div className="text-slate-500">GST</div>
+                    <div className="mt-0.5 tabular-nums text-slate-200">{summary.gst.toFixed(2)}</div>
+                  </div>
+                  <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                    <div className="text-slate-500">Net</div>
+                    <div className="mt-0.5 tabular-nums text-slate-200">{summary.netRounded.toFixed(2)}</div>
+                  </div>
+                </div>
+                <div className="hidden md:block min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-sm text-slate-300 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+                  <span>
+                    Items <span className="font-semibold tabular-nums text-slate-100">{summary.items}</span>
+                  </span>
+                  <span className="mx-2 text-slate-600">|</span>
+                  <span>
+                    Qty <span className="font-semibold tabular-nums text-slate-100">{summary.qty}</span>
+                  </span>
+                  <span className="mx-2 text-slate-600">|</span>
+                  <span>
+                    Gross <span className="font-semibold tabular-nums text-slate-100">{summary.gross.toFixed(2)}</span>
+                  </span>
+                  <span className="mx-2 text-slate-600">|</span>
+                  <span>
+                    Disc <span className="font-semibold tabular-nums text-slate-100">{summary.discount.toFixed(2)}</span>
+                  </span>
+                  <span className="mx-2 text-slate-600">|</span>
+                  <span>
+                    GST <span className="font-semibold tabular-nums text-slate-100">{summary.gst.toFixed(2)}</span>
+                  </span>
+                  <span className="mx-2 text-slate-600">|</span>
+                  <span>
+                    Round <span className="font-semibold tabular-nums text-slate-100">{summary.roundOff.toFixed(2)}</span>
+                  </span>
+                  <span className="mx-2 text-slate-600">|</span>
+                  <span>
+                    Net <span className="font-semibold tabular-nums text-slate-100">{summary.netRounded.toFixed(2)}</span>
+                  </span>
+                  <span className="mx-2 text-slate-600">|</span>
+                  <span className="inline-flex items-center gap-1">
+                    Paid
+                    <input
+                      className="h-9 w-28 rounded-xl bg-slate-950/40 px-3 text-sm text-slate-100 ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                      type="number"
+                      min={0}
+                      step="0.01"
+                      value={Number(header.paidAmount || 0) === 0 ? '' : header.paidAmount}
+                      onKeyDown={(e) => {
+                        if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
+                      }}
+                      onChange={(e) =>
+                        setHeader((h) => ({
+                          ...h,
+                          paidAmountTouched: true,
+                          paidAmount: e.target.value === '' ? 0 : Number(e.target.value),
+                        }))
+                      }
+                    />
+                  </span>
+                  <span className="mx-2 text-slate-600">|</span>
+                  <span>
+                    Payable{' '}
+                    <span className="font-semibold tabular-nums text-slate-100">
+                      {(
+                        Math.max(
+                          0,
+                          summary.netRounded -
+                            Math.min(Math.max(0, Number(header.paidAmount || 0)), summary.netRounded),
+                        )
+                      ).toFixed(2)}
+                    </span>
+                  </span>
+                </div>
 
-              <div className="lg:col-span-8 rounded-3xl bg-white/5 p-6 ring-1 ring-inset ring-white/10">
-              <div className="text-sm font-semibold">Purchase Summary</div>
-              <div className="mt-4 grid gap-4 md:grid-cols-4">
-                <div className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
-                  <div className="text-xs text-slate-400">Total Items</div>
-                  <div className="mt-1 text-lg font-semibold">{summary.items}</div>
-                </div>
-                <div className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
-                  <div className="text-xs text-slate-400">Total Quantity</div>
-                  <div className="mt-1 text-lg font-semibold">{summary.qty}</div>
-                </div>
-                <div className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
-                  <div className="text-xs text-slate-400">Gross Amount</div>
-                  <div className="mt-1 text-lg font-semibold">{summary.gross.toFixed(2)}</div>
-                </div>
-                <div className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
-                  <div className="text-xs text-slate-400">Discount</div>
-                  <div className="mt-1 text-lg font-semibold">{summary.discount.toFixed(2)}</div>
-                </div>
-                <div className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
-                  <div className="text-xs text-slate-400">CGST</div>
-                  <div className="mt-1 text-lg font-semibold">{summary.cgst.toFixed(2)}</div>
-                </div>
-                <div className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
-                  <div className="text-xs text-slate-400">SGST</div>
-                  <div className="mt-1 text-lg font-semibold">{summary.sgst.toFixed(2)}</div>
-                </div>
-                <div className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
-                  <div className="text-xs text-slate-400">Total GST</div>
-                  <div className="mt-1 text-lg font-semibold">{summary.gst.toFixed(2)}</div>
-                </div>
-                <div className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
-                  <div className="text-xs text-slate-400">Round Off</div>
-                  <div className="mt-1 text-lg font-semibold">{summary.roundOff.toFixed(2)}</div>
-                </div>
-              </div>
-
-               <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                 <div className="flex flex-wrap items-end gap-3 text-sm text-slate-300">
-                   <div>
-                     Net Amount:{' '}
-                     <span className="text-xl font-semibold text-slate-100">
-                       {summary.netRounded.toFixed(2)}
-                     </span>
-                   </div>
-                   <div className="flex items-end gap-2">
-                     <span>Paid:</span>
-                     <input
-                       className="h-9 w-28 rounded-xl bg-slate-950/40 px-3 text-sm text-slate-100 ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
-                       type="number"
-                       min={0}
-                       step="0.01"
-                       value={Number(header.paidAmount || 0) === 0 ? '' : header.paidAmount}
-                       onKeyDown={(e) => {
-                         if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
-                       }}
-                       onChange={(e) =>
-                         setHeader((h) => ({ ...h, paidAmount: e.target.value === '' ? 0 : Number(e.target.value) }))
-                       }
-                     />
-                   </div>
-                   <div>
-                     Payable:{' '}
-                     <span className="text-xl font-semibold text-slate-100">
-                       {(Math.max(0, summary.netRounded - Math.min(Math.max(0, Number(header.paidAmount || 0)), summary.netRounded))).toFixed(2)}
-                     </span>
-                   </div>
-                 </div>
-                 <div className="flex flex-wrap gap-2">
-                   <Button type="button" variant="secondary" onClick={() => window.print()}>
-                     Print Purchase Invoice
-                   </Button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Button type="button" variant="secondary" onClick={() => window.print()}>
+                    Print
+                  </Button>
                   <Button type="button" variant="secondary" onClick={cancel}>
                     Cancel
                   </Button>
                   <Button type="submit" disabled={saving}>
-                    {saving ? 'Saving…' : 'Save Purchase'}
+                    {saving ? 'Saving...' : 'Save'}
                   </Button>
                 </div>
               </div>
@@ -840,6 +1656,294 @@ export default function PurchasePage() {
               </form>
             ) : null}
           </div>
+
+          {batchPopoverOpen ? (
+            <div
+              className="fixed inset-0 z-[99998]"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setBatchPopoverOpen(false)
+              }}
+            >
+              <div
+                className="fixed z-[99999] max-h-[60vh] overflow-auto rounded-2xl bg-slate-950 p-2 ring-1 ring-inset ring-white/10 shadow-2xl"
+                style={{ top: batchPopoverPos.top, left: batchPopoverPos.left, width: batchPopoverPos.width }}
+                onMouseDown={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between gap-3 px-2 py-1">
+                  <div className="text-xs font-semibold text-slate-200">Batches</div>
+                  <button
+                    type="button"
+                    className="text-xs text-slate-400 hover:text-slate-200"
+                    onClick={() => setBatchPopoverOpen(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                {!active?.medicineId ? (
+                  <div className="px-2 py-3 text-sm text-slate-500">No medicine selected.</div>
+                ) : batchLoading ? (
+                  <div className="px-2 py-3 text-sm text-slate-400">Loading batches...</div>
+                ) : batches.length === 0 ? (
+                  <div className="px-2 py-3 text-sm text-slate-500">No batches found for this item.</div>
+                ) : (
+                  <div className="grid gap-2 p-1">
+                    {batches.map((b) => (
+                      <button
+                        key={b._id}
+                        type="button"
+                        className="w-full rounded-xl bg-white/5 px-3 py-2 text-left ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                        onClick={() => {
+                          applyBatchToRow(activeRow, b, { setQtyIfEmpty: true })
+                          setBatchPopoverOpen(false)
+                        }}
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="text-sm font-semibold text-slate-100">{b.batchNumber}</div>
+                          <div className="text-xs text-slate-400">{fmtExpiryLabel(b.expiryDate)}</div>
+                        </div>
+                        <div className="mt-1 text-[11px] text-slate-300">
+                          Stock <span className="text-slate-100">{b.quantity}</span> | MRP{' '}
+                          <span className="text-slate-100">{Number(b.mrp || 0).toFixed(2)}</span> | Purchase{' '}
+                          <span className="text-slate-100">{Number(b.purchaseRate || 0).toFixed(2)}</span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : null}
+
+          {showDistributorModal ? (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setShowDistributorModal(false)
+              }}
+            >
+              <div className="w-full max-w-2xl rounded-3xl bg-slate-950 p-6 ring-1 ring-inset ring-white/10">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-semibold">Add Distributor</div>
+                    <div className="mt-1 text-xs text-slate-500">Fields: Distributor name, DL No, Address</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-sm text-slate-300 hover:text-slate-100"
+                    onClick={() => setShowDistributorModal(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                {!canManageSuppliers ? (
+                  <div className="mt-4 rounded-2xl bg-amber-500/10 p-3 text-xs text-amber-200 ring-1 ring-inset ring-amber-400/20">
+                    Only PharmacyAdmin can add distributors.
+                  </div>
+                ) : null}
+
+                <form onSubmit={onCreateDistributor} className="mt-5 grid gap-4">
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <input
+                      className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                      placeholder="Distributor name"
+                      value={distributor.supplierName}
+                      onChange={(e) => setDistributor((s) => ({ ...s, supplierName: e.target.value }))}
+                      required
+                      disabled={!canManageSuppliers}
+                    />
+                    <input
+                      className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                      placeholder="DL No"
+                      value={distributor.dlNumber}
+                      onChange={(e) => setDistributor((s) => ({ ...s, dlNumber: e.target.value }))}
+                      required
+                      disabled={!canManageSuppliers}
+                    />
+                    <input
+                      className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                      placeholder="Address"
+                      value={distributor.address}
+                      onChange={(e) => setDistributor((s) => ({ ...s, address: e.target.value }))}
+                      required
+                      disabled={!canManageSuppliers}
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2">
+                    <Button type="button" variant="secondary" onClick={() => setShowDistributorModal(false)}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={!canManageSuppliers || savingDistributor}>
+                      {savingDistributor ? 'Saving...' : 'Save Distributor'}
+                    </Button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ) : null}
+
+          {showMedicineModal ? (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+              onMouseDown={(e) => {
+                if (e.target === e.currentTarget) setShowMedicineModal(false)
+              }}
+            >
+              <div className="w-full max-w-4xl rounded-3xl bg-slate-950 p-6 ring-1 ring-inset ring-white/10">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-semibold">Add Medicine</div>
+                    <div className="mt-1 text-xs text-slate-500">Add a new item quickly without leaving purchase.</div>
+                  </div>
+                  <button
+                    type="button"
+                    className="text-sm text-slate-300 hover:text-slate-100"
+                    onClick={() => setShowMedicineModal(false)}
+                  >
+                    Close
+                  </button>
+                </div>
+
+                {medicineModalError ? (
+                  <div className="mt-4 rounded-2xl bg-rose-500/10 p-3 text-xs text-rose-200 ring-1 ring-inset ring-rose-400/20">
+                    {medicineModalError}
+                  </div>
+                ) : null}
+
+                <form onSubmit={onCreateMedicine} className="mt-5 grid gap-4">
+                  <div className="grid gap-4 md:grid-cols-3">
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Category *</span>
+                      <select
+                        className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                        value={newMedicine.category}
+                        onChange={(e) => {
+                          const next = e.target.value
+                          setNewMedicine((m) => ({ ...m, category: next, manufacturer: '', allowLooseSale: false }))
+                          setNewMedicineCustomFields({})
+                          void ensureManufacturersForCategoryName(next)
+                        }}
+                        required
+                      >
+                        <option value="">Select category</option>
+                        {categories.map((c) => (
+                          <option key={c._id} value={c.name}>
+                            {c.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Manufacturer *</span>
+                      <select
+                        className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                        value={newMedicine.manufacturer}
+                        onChange={(e) => setNewMedicine((m) => ({ ...m, manufacturer: e.target.value }))}
+                        disabled={!newMedicine.category}
+                        required
+                      >
+                        <option value="">{newMedicine.category ? 'Select manufacturer' : 'Select category first'}</option>
+                        {(newMedicine.category
+                          ? manufacturersByCategoryId[categoriesByName.get(newMedicine.category)] || []
+                          : []
+                        ).map((m) => (
+                          <option key={m._id || m.name} value={m.name}>
+                            {m.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Medicine name *</span>
+                      <input
+                        className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                        value={newMedicine.medicineName}
+                        onChange={(e) => setNewMedicine((m) => ({ ...m, medicineName: e.target.value }))}
+                        required
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Rack</span>
+                      <input
+                        className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                        value={newMedicine.rackLocation}
+                        onChange={(e) => setNewMedicine((m) => ({ ...m, rackLocation: e.target.value }))}
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">HSN *</span>
+                      <input
+                        className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                        value={newMedicine.hsnCode}
+                        onChange={(e) => setNewMedicine((m) => ({ ...m, hsnCode: e.target.value }))}
+                        required
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">GST % *</span>
+                      <input
+                        className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={Number(newMedicine.gstPercent || 0) === 0 ? '' : newMedicine.gstPercent}
+                        onChange={(e) =>
+                          setNewMedicine((m) => ({ ...m, gstPercent: e.target.value === '' ? 0 : Number(e.target.value) }))
+                        }
+                        required
+                      />
+                    </label>
+                  </div>
+
+                  {selectedNewMedicineCategory?.looseSaleAllowed ? (
+                    <label className="flex items-center gap-3 rounded-2xl bg-slate-950/40 px-4 py-3 text-sm ring-1 ring-inset ring-white/10">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 accent-sky-400"
+                        checked={Boolean(newMedicine.allowLooseSale)}
+                        onChange={(e) => setNewMedicine((m) => ({ ...m, allowLooseSale: e.target.checked }))}
+                      />
+                      <span className="text-slate-200">Allow loose sale</span>
+                    </label>
+                  ) : null}
+
+                  {selectedNewMedicineCategory?.fields?.length ? (
+                    <div className="rounded-2xl bg-black/20 p-4 ring-1 ring-inset ring-white/10">
+                      <div className="text-xs font-semibold text-slate-300">Category fields</div>
+                      <div className="mt-3 grid gap-4 md:grid-cols-3">
+                        {selectedNewMedicineCategory.fields.map((f) => (
+                          <label key={f.key} className="grid gap-1.5">
+                            <span className="text-xs font-medium text-slate-300">
+                              {f.label} {f.required ? <span className="text-rose-400">*</span> : null}
+                            </span>
+                            {renderCustomFieldInput(f, newMedicineCustomFields[f.key], (v) =>
+                              setNewMedicineCustomFields((p) => ({ ...p, [f.key]: v })),
+                            )}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="flex justify-end gap-2">
+                    <Button type="button" variant="secondary" onClick={() => setShowMedicineModal(false)}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" disabled={savingMedicine}>
+                      {savingMedicine ? 'Saving...' : 'Save Medicine'}
+                    </Button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          ) : null}
         </div>
       </main>
       <SiteFooter />

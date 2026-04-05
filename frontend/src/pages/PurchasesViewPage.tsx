@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import Button from '../components/Button'
-import Container from '../components/Container'
 import SiteHeader from '../components/SiteHeader'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../services/api'
@@ -354,8 +353,8 @@ export default function PurchasesViewPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <SiteHeader />
-      <main className="py-10">
-        <Container>
+      <main className="py-4">
+        <div className="mx-auto w-full px-4 sm:px-6">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="text-2xl font-semibold">Purchase Views</h1>
@@ -389,7 +388,7 @@ export default function PurchasesViewPage() {
                 <div className="flex flex-1 flex-wrap items-center gap-3">
                   <input
                     className="h-10 w-full rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 md:w-80"
-                    placeholder="Search invoice / supplier / type..."
+                    placeholder="Search invoice / distributor / type..."
                     value={searchText}
                     onChange={(e) => setSearchText(e.target.value)}
                   />
@@ -409,12 +408,76 @@ export default function PurchasesViewPage() {
                 </Button>
               </div>
 
-              <div className="mt-4 overflow-x-auto">
+              <div className="mt-4 md:hidden space-y-3">
+                {loading ? (
+                  <div className="rounded-2xl bg-slate-950/40 p-4 text-sm text-slate-400 ring-1 ring-inset ring-white/10">
+                    Loading...
+                  </div>
+                ) : filtered.length ? (
+                  filtered.map((p) => (
+                    <div
+                      key={p._id}
+                      className="rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-semibold text-slate-100">Invoice {p.invoiceNumber}</div>
+                          <div className="mt-0.5 text-xs text-slate-400">
+                            {supplierName(p.supplierId)} | {fmtDate(p.invoiceDate)} | {p.paymentType}
+                          </div>
+                        </div>
+                        <div className="text-right text-xs text-slate-400">
+                          Net <span className="tabular-nums text-slate-100">{Number(p.netAmount || 0).toFixed(2)}</span>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                        <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                          <div className="text-slate-500">Paid</div>
+                          <div className="mt-0.5 tabular-nums text-slate-200">{Number(p.paidAmount || 0).toFixed(2)}</div>
+                        </div>
+                        <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                          <div className="text-slate-500">Balance</div>
+                          <div className="mt-0.5 tabular-nums text-slate-200">{Number(p.balanceAmount || 0).toFixed(2)}</div>
+                        </div>
+                        <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                          <div className="text-slate-500">Net</div>
+                          <div className="mt-0.5 tabular-nums text-slate-200">{Number(p.netAmount || 0).toFixed(2)}</div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <Button variant="secondary" onClick={() => void openView(p)}>
+                          View
+                        </Button>
+                        <Button variant="secondary" onClick={() => void openViewAndEditMedicines(p)} disabled={!canManage}>
+                          Edit Meds
+                        </Button>
+                        <Button variant="secondary" onClick={() => openPay(p)} disabled={!canManage}>
+                          Pay
+                        </Button>
+                        <Button variant="secondary" onClick={() => openEdit(p)} disabled={!canManage}>
+                          Edit
+                        </Button>
+                        <Button variant="danger" onClick={() => void removePurchase(p)} disabled={!canManage}>
+                          Delete
+                        </Button>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-2xl bg-slate-950/40 p-4 text-sm text-slate-400 ring-1 ring-inset ring-white/10">
+                    No purchases found.
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 hidden md:block overflow-x-auto">
                 <table className="w-full min-w-[980px] text-left text-sm">
                   <thead className="text-xs uppercase tracking-wide text-slate-400">
                     <tr>
                       <th className="py-2 pr-3">Invoice</th>
-                      <th className="py-2 pr-3">Supplier</th>
+                      <th className="py-2 pr-3">Distributor</th>
                       <th className="py-2 pr-3">Invoice Date</th>
                       <th className="py-2 pr-3">Type</th>
                       <th className="py-2 pr-3 text-right">Net</th>
@@ -561,14 +624,14 @@ export default function PurchasesViewPage() {
 
                 <div className="mt-4 grid gap-3">
                   <label className="grid gap-1.5">
-                    <span className="text-xs font-medium text-slate-300">Supplier</span>
+                    <span className="text-xs font-medium text-slate-300">Distributor</span>
                     <select
                       className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10"
                       value={editForm.supplierId}
                       onChange={(e) => setEditForm((f) => ({ ...f, supplierId: e.target.value }))}
                       required
                     >
-                      <option value="">Select supplier</option>
+                      <option value="">Select distributor</option>
                       {suppliers.map((s) => (
                         <option key={s._id} value={s._id}>
                           {s.supplierName}
@@ -915,7 +978,7 @@ export default function PurchasesViewPage() {
               </div>
             </div>
           ) : null}
-        </Container>
+        </div>
       </main>
     </div>
   )

@@ -71,7 +71,7 @@ export default function UsersPage() {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100">
         <SiteHeader />
-        <main className="py-12">
+        <main className="py-4">
           <Container>
             <div className="rounded-3xl bg-white/5 p-6 ring-1 ring-inset ring-white/10">
               <div className="text-sm text-slate-300">This page is for tenant users only.</div>
@@ -134,7 +134,7 @@ export default function UsersPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <SiteHeader />
-      <main className="py-12">
+      <main className="py-4">
         <Container>
           <div className="flex items-center justify-between gap-4">
             <div>
@@ -325,4 +325,3 @@ export default function UsersPage() {
     </div>
   )
 }
-

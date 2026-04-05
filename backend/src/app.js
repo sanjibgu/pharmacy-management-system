@@ -20,6 +20,9 @@ import purchaseLegacyRoutes from './routes/purchaseLegacyRoutes.js'
 import salesRoutes from './routes/salesRoutes.js'
 import categoryRoutes from './routes/categoryRoutes.js'
 import stockRoutes from './routes/stockRoutes.js'
+import reportRoutes from './routes/reportRoutes.js'
+import manufacturerRoutes from './routes/manufacturerRoutes.js'
+import globalCatalogRoutes from './routes/globalCatalogRoutes.js'
 
 export function createApp() {
   const app = express()
@@ -74,7 +77,9 @@ export function createApp() {
   app.use('/api/superadmin', superAdminRoutes)
 
   app.use('/api/medicines', medicineRoutes)
+  app.use('/api/manufacturers', manufacturerRoutes)
   app.use('/api/categories', categoryRoutes)
+  app.use('/api/global', globalCatalogRoutes)
   app.use('/api/users', userRoutes)
   app.use('/api/purchases', purchaseRoutes)
   app.use('/api/purchase', purchaseLegacyRoutes)
@@ -82,6 +87,7 @@ export function createApp() {
   app.use('/api/batches', batchRoutes)
   app.use('/api/sales', salesRoutes)
   app.use('/api/stocks', stockRoutes)
+  app.use('/api/reports', reportRoutes)
 
   app.use(notFound)
   app.use(errorHandler)

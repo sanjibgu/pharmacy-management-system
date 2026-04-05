@@ -135,8 +135,8 @@ export default function StocksPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <SiteHeader />
-      <main className="py-10">
-        <div className="mx-auto w-full px-6">
+      <main className="py-4">
+        <div className="mx-auto w-full px-4 sm:px-6">
           <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="text-2xl font-semibold">Stocks</h1>
@@ -199,7 +199,97 @@ export default function StocksPage() {
                 </Button>
               </div>
 
-              <div className="mt-4 overflow-x-auto">
+              <div className="mt-4 md:hidden space-y-3">
+                {loading ? (
+                  <div className="rounded-2xl bg-slate-950/40 p-4 text-sm text-slate-400 ring-1 ring-inset ring-white/10">
+                    Loading...
+                  </div>
+                ) : filtered.length ? (
+                  filtered.map((s) => {
+                    const total = Number(s.quantity || 0) + Number(s.freeQuantity || 0)
+                    const rack = s.rackLocation || s.medicine?.defaultRackLocation || ''
+                    const expired = isExpired(s.expiryDate)
+                    const near = !expired && isNearExpiry(s.expiryDate, 30)
+                    const expClass = expired
+                      ? 'text-rose-300'
+                      : near
+                        ? 'text-amber-200'
+                        : 'text-slate-200'
+                    const cardClass = expired
+                      ? 'bg-rose-500/5 ring-rose-400/20'
+                      : near
+                        ? 'bg-amber-500/5 ring-amber-400/20'
+                        : 'bg-slate-950/40 ring-white/10'
+
+                    return (
+                      <div key={s._id} className={`rounded-2xl p-4 ring-1 ring-inset ${cardClass}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-slate-100">
+                              {s.medicine?.medicineName || '-'}
+                            </div>
+                            <div className="mt-0.5 truncate text-xs text-slate-400">
+                              {s.medicine?.manufacturer || ''}
+                              {s.medicine?.category ? ` - ${s.medicine.category}` : ''}
+                            </div>
+                          </div>
+                          <div className={`text-right text-xs ${expClass}`}>Exp {fmtDate(s.expiryDate)}</div>
+                        </div>
+
+                        <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                          <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                            <div className="text-slate-500">Qty</div>
+                            <div className="mt-0.5 tabular-nums text-slate-200">{Number(s.quantity || 0)}</div>
+                          </div>
+                          <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                            <div className="text-slate-500">Free</div>
+                            <div className="mt-0.5 tabular-nums text-slate-200">{Number(s.freeQuantity || 0)}</div>
+                          </div>
+                          <div className="rounded-xl bg-black/20 p-2 ring-1 ring-inset ring-white/10">
+                            <div className="text-slate-500">Total</div>
+                            <div className="mt-0.5 tabular-nums text-slate-200">{total}</div>
+                          </div>
+                        </div>
+
+                        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-300">
+                          <div>
+                            Batch <span className="tabular-nums text-slate-100">{s.batchNumber}</span>
+                          </div>
+                          <div>
+                            Rack <span className="text-slate-100">{rack || '-'}</span>
+                          </div>
+                          <div>
+                            MRP{' '}
+                            <span className="tabular-nums text-slate-100">{Number(s.mrp || 0).toFixed(2)}</span>
+                          </div>
+                          <div>
+                            P.R{' '}
+                            <span className="tabular-nums text-slate-100">{Number(s.purchaseRate || 0).toFixed(2)}</span>
+                          </div>
+                          <div>
+                            Final{' '}
+                            <span className="tabular-nums text-slate-100">
+                              {Number(s.finalPurchaseRate || 0).toFixed(2)}
+                            </span>
+                          </div>
+                          <div>
+                            S.R{' '}
+                            <span className="tabular-nums text-slate-100">{Number(s.saleRate || 0).toFixed(2)}</span>
+                          </div>
+                        </div>
+
+                        <div className="mt-2 text-xs text-slate-500">Updated {fmtDate(s.updatedAt)}</div>
+                      </div>
+                    )
+                  })
+                ) : (
+                  <div className="rounded-2xl bg-slate-950/40 p-4 text-sm text-slate-400 ring-1 ring-inset ring-white/10">
+                    No stock found.
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 hidden md:block overflow-x-auto">
                 <table className="w-full min-w-[1200px] text-left text-sm">
                   <thead className="text-xs uppercase tracking-wide text-slate-400">
                     <tr>

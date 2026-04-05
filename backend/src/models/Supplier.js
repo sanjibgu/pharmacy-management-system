@@ -16,6 +16,7 @@ const SupplierSchema = new mongoose.Schema(
     address: { type: String, trim: true, default: '' },
     mobileNumber: { type: String, trim: true, default: '' },
     email: { type: String, trim: true, lowercase: true, default: '' },
+    isActive: { type: Boolean, required: true, default: true, index: true },
   },
   { timestamps: true },
 )

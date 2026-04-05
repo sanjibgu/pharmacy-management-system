@@ -5,7 +5,7 @@ import { requireAuth } from '../middleware/auth.js'
 import { attachPharmacyId } from '../middleware/attachPharmacyId.js'
 import { requireModuleAccess } from '../middleware/requireModuleAccess.js'
 import { validateBody } from '../middleware/validate.js'
-import { createSupplier, deleteSupplier, listSuppliers, updateSupplier } from '../controllers/supplierController.js'
+import { createSupplier, deleteSupplier, listSuppliers, toggleSupplierActive, updateSupplier } from '../controllers/supplierController.js'
 
 const router = Router()
 
@@ -53,6 +53,16 @@ router.put(
   requireModuleAccess('purchases', 'manage'),
   validateBody(updateSchema),
   updateSupplier,
+)
+
+router.patch(
+  '/:id/active',
+  requireTenant,
+  requireAuth,
+  attachPharmacyId,
+  requireModuleAccess('purchases', 'manage'),
+  validateBody(z.object({ isActive: z.coerce.boolean() })),
+  toggleSupplierActive,
 )
 
 router.delete(

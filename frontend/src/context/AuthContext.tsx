@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 type User = {
   id: string
@@ -34,19 +34,71 @@ function loadInitial(): AuthState {
 
 const AuthContext = createContext<AuthContextValue | null>(null)
 
+function decodeJwtExpMs(token: string) {
+  try {
+    const parts = token.split('.')
+    if (parts.length < 2) return null
+    const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const padded = b64.padEnd(b64.length + ((4 - (b64.length % 4)) % 4), '=')
+    const json = atob(padded)
+    const payload = JSON.parse(json) as { exp?: number }
+    const exp = Number(payload?.exp)
+    if (!Number.isFinite(exp) || exp <= 0) return null
+    return exp * 1000
+  } catch {
+    return null
+  }
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>(() => loadInitial())
 
-  const value = useMemo<AuthContextValue>(() => {
-    function setAuth(next: AuthState) {
-      setState(next)
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+  const setAuth = useCallback((next: AuthState) => {
+    setState(next)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+  }, [])
+
+  const logout = useCallback(() => {
+    setAuth({ token: null, user: null })
+  }, [setAuth])
+
+  const logoutTimer = useRef<number | null>(null)
+
+  // Auto logout when JWT expires (client-side timer; server-side still enforces expiry).
+  useEffect(() => {
+    if (logoutTimer.current != null) {
+      clearTimeout(logoutTimer.current)
+      logoutTimer.current = null
     }
-    function logout() {
-      setAuth({ token: null, user: null })
+
+    if (!state.token) return
+
+    const expMs = decodeJwtExpMs(state.token)
+    if (!expMs) return
+
+    // Logout a bit early to avoid "expired" flashes during API calls.
+    const skewMs = 5000
+    const delay = Math.max(0, expMs - Date.now() - skewMs)
+    logoutTimer.current = window.setTimeout(() => {
+      logout()
+    }, delay)
+
+    return () => {
+      if (logoutTimer.current != null) {
+        clearTimeout(logoutTimer.current)
+        logoutTimer.current = null
+      }
     }
-    return { ...state, setAuth, logout }
-  }, [state])
+  }, [logout, state.token])
+
+  // Auto logout on 401 responses (dispatched by apiFetch).
+  useEffect(() => {
+    const handler = () => logout()
+    window.addEventListener('auth:logout', handler)
+    return () => window.removeEventListener('auth:logout', handler)
+  }, [logout])
+
+  const value = useMemo<AuthContextValue>(() => ({ ...state, setAuth, logout }), [logout, setAuth, state])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

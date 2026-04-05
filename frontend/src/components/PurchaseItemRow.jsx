@@ -56,11 +56,14 @@ export default function PurchaseItemRow({
   onRemove,
   onActivate,
   search,
+  categories,
+  manufacturers,
+  ensureManufacturers,
 }) {
   const inputBase =
-    'h-9 w-full min-w-0 rounded-lg bg-slate-950/40 px-2 text-xs ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400'
+    'h-9 w-full min-w-0 rounded-lg bg-slate-950/40 px-1.5 text-[11px] ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400'
   const inputNum = `${inputBase} text-right tabular-nums`
-  const cell = 'py-1.5 pr-2'
+  const cell = 'py-1 pr-1'
   const [open, setOpen] = useState(false)
   const [results, setResults] = useState([])
   const [highlight, setHighlight] = useState(0)
@@ -69,8 +72,39 @@ export default function PurchaseItemRow({
   const inputRef = useRef(null)
   const expiryPickerRef = useRef(null)
   const [popup, setPopup] = useState({ top: 0, left: 0, width: 0 })
+  const requiresRow = Boolean(row.medicineId)
 
   const totals = useMemo(() => calc(row), [row])
+  const selectedCategory = useMemo(
+    () => (categories || []).find((c) => c.name === row.categoryName) || null,
+    [categories, row.categoryName],
+  )
+
+  function detailLine(m) {
+    const parts = []
+    if (m.category) parts.push(String(m.category))
+    if (m.manufacturer) parts.push(String(m.manufacturer))
+
+    const cat =
+      (categories || []).find((c) => c.name === (row.categoryName || m.category || '')) || null
+    const fields = cat?.fields || []
+    const cf = m.customFields && typeof m.customFields === 'object' ? m.customFields : null
+    const customParts = []
+    for (const f of fields) {
+      const v = cf ? cf[f.key] : undefined
+      if (v === undefined || v === null || v === '') continue
+      customParts.push(`${f.label}: ${String(v)}`)
+    }
+
+    if (customParts.length) {
+      parts.push(...customParts)
+    } else {
+      if (m.rackLocation) parts.push(`Rack ${m.rackLocation}`)
+      if (m.hsnCode) parts.push(`HSN ${m.hsnCode}`)
+    }
+
+    return parts.join(' - ')
+  }
 
   function blockInvalidNumberKeys(e) {
     if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
@@ -83,6 +117,8 @@ export default function PurchaseItemRow({
     onChange(index, {
       medicineId: m._id,
       productName: m.medicineName,
+      categoryName: m.category || row.categoryName || '',
+      manufacturerName: m.manufacturer || row.manufacturerName || '',
       rackLocation: row.rackLocation ? row.rackLocation : (m.rackLocation || ''),
       hsnCode: m.hsnCode || '',
       gstPercent: Number(m.gstPercent || 0),
@@ -99,13 +135,25 @@ export default function PurchaseItemRow({
   }, [row.productName])
 
   useEffect(() => {
+    if (!row.categoryName) return
+    if (typeof ensureManufacturers === 'function') void ensureManufacturers(row.categoryName)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [row.categoryName])
+
+  useEffect(() => {
     if (!open) return
     const q = query.trim()
-    if (lastFetchedQuery.current === q) return
+    const fetchKey = `${row.categoryName || ''}::${row.manufacturerName || ''}::${q}`
+    if (lastFetchedQuery.current === fetchKey) return
     const t = setTimeout(async () => {
       try {
-        const items = await search(q)
-        lastFetchedQuery.current = q
+        if (q.length < 2) {
+          setResults([])
+          setHighlight(0)
+          return
+        }
+        const items = await search(q, row.categoryName, row.manufacturerName)
+        lastFetchedQuery.current = fetchKey
         setResults(items)
         setHighlight(0)
       } catch {
@@ -114,7 +162,7 @@ export default function PurchaseItemRow({
       }
     }, 200)
     return () => clearTimeout(t)
-  }, [open, query, search])
+  }, [open, query, search, row.categoryName])
 
   useEffect(() => {
     if (!open) return
@@ -143,17 +191,64 @@ export default function PurchaseItemRow({
     <tr
       className="border-t border-white/10 align-top hover:bg-white/[0.03]"
       onClick={() => onActivate(index)}
+      onFocusCapture={() => onActivate(index)}
     >
+      <td className={`relative ${cell} ${open ? 'z-50' : ''}`}>
+        <select
+          className={inputBase}
+          value={row.categoryName || ''}
+          onChange={(e) => {
+            const next = e.target.value
+            lastFetchedQuery.current = null
+            setQuery('')
+            setOpen(false)
+            setResults([])
+            onChange(index, { categoryName: next, manufacturerName: '', medicineId: '', productName: '' })
+          }}
+        >
+          <option value="">Category</option>
+          {(categories || []).map((c) => (
+            <option key={c._id} value={c.name}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+      </td>
+
+      <td className={`relative ${cell} ${open ? 'z-50' : ''}`}>
+        <select
+          className={inputBase}
+          value={row.manufacturerName || ''}
+          onChange={(e) => {
+            const next = e.target.value
+            lastFetchedQuery.current = null
+            setQuery('')
+            setOpen(false)
+            setResults([])
+            onChange(index, { manufacturerName: next, medicineId: '', productName: '' })
+          }}
+          disabled={!row.categoryName}
+        >
+          <option value="">{row.categoryName ? 'Manufacturer (optional)' : 'Select category first'}</option>
+          {(manufacturers || []).map((m) => (
+            <option key={m._id || m.name} value={m.name}>
+              {m.name}
+            </option>
+          ))}
+        </select>
+      </td>
+
       <td className={`relative ${cell} ${open ? 'z-50' : ''}`}>
         <input
           ref={inputRef}
-          className="h-9 w-full min-w-0 rounded-lg bg-slate-950/40 px-2 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
+          className="h-9 w-full min-w-0 rounded-lg bg-slate-950/40 px-1.5 text-[12px] ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
           value={query}
           onChange={(e) => {
             const next = e.target.value
             setQuery(next)
             if (row.medicineId || row.productName) onChange(index, { medicineId: '', productName: '' })
           }}
+          disabled={false}
           onKeyDown={(e) => {
             if (e.key === 'Escape') {
               setOpen(false)
@@ -175,7 +270,9 @@ export default function PurchaseItemRow({
               selectMedicine(results[highlight])
             }
           }}
-          onFocus={() => setOpen(true)}
+          onFocus={() => {
+            setOpen(true)
+          }}
           onBlur={() => {
             setTimeout(() => setOpen(false), 150)
             const q = String(query || '').trim()
@@ -185,8 +282,14 @@ export default function PurchaseItemRow({
               onChange(index, { medicineId: '', productName: '' })
             }
           }}
-          placeholder="Search medicine..."
-          required
+          placeholder={
+            row.categoryName
+              ? row.manufacturerName
+                ? 'Search item...'
+                : 'Search item (category selected)...'
+              : 'Search item...'
+          }
+          required={requiresRow}
         />
 
         {open && (results.length > 0 || String(query || '').trim().length >= 2) ? (
@@ -206,11 +309,7 @@ export default function PurchaseItemRow({
                 onMouseEnter={() => setHighlight(i)}
               >
                 <div className="font-medium">{m.medicineName}</div>
-                <div className="text-xs text-slate-500">
-                  {m.manufacturer || ''}
-                  {m.rackLocation ? ` • Rack ${m.rackLocation}` : ''}
-                  {m.hsnCode ? ` • HSN ${m.hsnCode}` : ''}
-                </div>
+                <div className="text-xs text-slate-500">{detailLine(m)}</div>
               </button>
             ))}
 
@@ -232,7 +331,7 @@ export default function PurchaseItemRow({
           value={row.batchNumber}
           onChange={(e) => onChange(index, { batchNumber: e.target.value })}
           placeholder="Batch"
-          required
+          required={requiresRow}
         />
       </td>
 
@@ -253,7 +352,7 @@ export default function PurchaseItemRow({
             onChange={(e) => onChange(index, { expiry: maskExpiryDmy(e.target.value) })}
             placeholder="DD/MM/YYYY"
             inputMode="numeric"
-            required
+            required={requiresRow}
           />
           <button
             type="button"
@@ -289,7 +388,7 @@ export default function PurchaseItemRow({
           value={Number(row.mrp || 0) === 0 ? '' : row.mrp}
           onChange={(e) => onChange(index, { mrp: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
-          required
+          required={requiresRow}
         />
       </td>
 
@@ -335,7 +434,7 @@ export default function PurchaseItemRow({
           value={Number(row.quantity || 0) === 0 ? '' : row.quantity}
           onChange={(e) => onChange(index, { quantity: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
-          required
+          required={requiresRow}
         />
       </td>
 
@@ -364,7 +463,7 @@ export default function PurchaseItemRow({
           value={Number(row.saleRate || 0) === 0 ? '' : row.saleRate}
           onChange={(e) => onChange(index, { saleRate: e.target.value === '' ? 0 : Number(e.target.value) })}
           onKeyDown={blockInvalidNumberKeys}
-          required
+          required={requiresRow}
         />
       </td>
 

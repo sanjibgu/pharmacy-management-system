@@ -17,7 +17,7 @@ export default function DashboardPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <SiteHeader />
-      <main className="py-12">
+      <main className="py-4">
         <Container>
           <div className="rounded-3xl bg-white/5 p-6 ring-1 ring-inset ring-white/10 md:p-8">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

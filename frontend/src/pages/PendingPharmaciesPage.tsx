@@ -6,6 +6,13 @@ import SiteHeader from '../components/SiteHeader'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../services/api'
 
+function isValidEmail(value: string) {
+  const v = String(value || '').trim()
+  if (!v) return false
+  // simple practical check (backend is source of truth)
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)
+}
+
 type Pharmacy = {
   _id: string
   pharmacyName: string
@@ -26,6 +33,11 @@ export default function PendingPharmaciesPage() {
   const [adminName, setAdminName] = useState('Pharmacy Admin')
   const [adminEmail, setAdminEmail] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
+
+  const canApprove =
+    adminName.trim().length >= 2 &&
+    isValidEmail(adminEmail) &&
+    adminPassword.length >= 8
 
   async function load() {
     setLoading(true)
@@ -52,7 +64,11 @@ export default function PendingPharmaciesPage() {
         method: 'PATCH',
         token,
         tenant: false,
-        body: { adminName, adminEmail, adminPassword },
+        body: {
+          adminName: adminName.trim(),
+          adminEmail: adminEmail.trim(),
+          adminPassword,
+        },
       })
       await load()
       alert(`Approved.\nSlug: ${res.slug}`)
@@ -79,7 +95,7 @@ export default function PendingPharmaciesPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <SiteHeader />
-      <main className="py-12">
+      <main className="py-4">
         <Container>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -105,6 +121,7 @@ export default function PendingPharmaciesPage() {
                 placeholder="Admin name"
                 value={adminName}
                 onChange={(e) => setAdminName(e.target.value)}
+                required
               />
               <input
                 className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
@@ -112,6 +129,7 @@ export default function PendingPharmaciesPage() {
                 value={adminEmail}
                 onChange={(e) => setAdminEmail(e.target.value)}
                 type="email"
+                required
               />
               <input
                 className="h-11 rounded-xl bg-slate-950/40 px-4 text-sm ring-1 ring-inset ring-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400"
@@ -119,8 +137,14 @@ export default function PendingPharmaciesPage() {
                 value={adminPassword}
                 onChange={(e) => setAdminPassword(e.target.value)}
                 type="password"
+                required
               />
             </div>
+            {!canApprove ? (
+              <div className="mt-3 text-xs text-slate-400">
+                Enter a valid admin email and a password with at least 8 characters to enable approval.
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-6 rounded-3xl bg-white/5 p-6 ring-1 ring-inset ring-white/10">
@@ -142,7 +166,9 @@ export default function PendingPharmaciesPage() {
                         <div className="mt-1 text-sm text-slate-500">{p.address}</div>
                       </div>
                       <div className="flex gap-2">
-                        <Button onClick={() => approve(p._id)}>Approve</Button>
+                        <Button onClick={() => approve(p._id)} disabled={!canApprove}>
+                          Approve
+                        </Button>
                         <Button variant="secondary" onClick={() => reject(p._id)}>
                           Reject
                         </Button>

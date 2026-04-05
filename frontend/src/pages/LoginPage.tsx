@@ -46,7 +46,11 @@ export default function LoginPage() {
       if (isLocalhost && slug) nav(`/${slug}/dashboard`)
       else nav('/dashboard')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Login failed')
+      const msg = err instanceof Error ? err.message : 'Login failed'
+      setError(msg)
+      if (/Pharmacy is deactivated/i.test(msg)) {
+        alert(msg)
+      }
     } finally {
       setLoading(false)
     }

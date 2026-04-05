@@ -5,7 +5,7 @@ import MedicinePickerModal from '../components/MedicinePickerModal'
 import SiteHeader from '../components/SiteHeader'
 import SaleItemRow from '../components/SaleItemRow'
 import { useAuth } from '../context/AuthContext'
-import { createSale, getSaleBatches, searchMedicines } from '../services/salesService'
+import { createSale, getSaleBatches } from '../services/salesService'
 import { getTenantSlug } from '../services/tenant'
 
 function isoToday() {
@@ -19,6 +19,12 @@ function fmtExpiryLabel(dateStr) {
   const mm = String(d.getMonth() + 1).padStart(2, '0')
   const yyyy = String(d.getFullYear())
   return `${dd}/${mm}/${yyyy}`
+}
+
+function round2(n) {
+  const v = Number(n || 0)
+  if (!Number.isFinite(v)) return 0
+  return Number(v.toFixed(2))
 }
 
 function emptyRow() {
@@ -67,6 +73,7 @@ export default function SalesPage() {
     saleDate: isoToday(),
     paymentType: 'Cash',
     paidAmount: 0,
+    paidTouched: false,
     billDiscountPercent: 0,
     patientName: '',
     phone: '',
@@ -77,6 +84,7 @@ export default function SalesPage() {
   const [rows, setRows] = useState([emptyRow()])
   const [activeRow, setActiveRow] = useState(0)
   const active = rows[activeRow] || null
+  const activeTotals = useMemo(() => (active ? lineTotals(active) : { amount: 0, profit: 0 }), [active])
 
   const [batchLoading, setBatchLoading] = useState(false)
   const [batches, setBatches] = useState([])
@@ -92,25 +100,19 @@ export default function SalesPage() {
 
         if (Object.prototype.hasOwnProperty.call(patch, 'discountPercent')) {
           const disc = Math.min(100, Math.max(0, Number(next.discountPercent || 0)))
-          next.discountPercent = disc
-          next.saleRate = mrp > 0 ? Math.max(0, mrp - (mrp * disc) / 100) : Math.max(0, Number(next.saleRate || 0))
+          next.discountPercent = round2(disc)
+          next.saleRate = round2(
+            mrp > 0 ? Math.max(0, mrp - (mrp * Number(next.discountPercent)) / 100) : Math.max(0, Number(next.saleRate || 0)),
+          )
         } else if (Object.prototype.hasOwnProperty.call(patch, 'saleRate')) {
           const sr = Math.max(0, Number(next.saleRate || 0))
-          next.saleRate = sr
-          next.discountPercent = mrp > 0 ? Math.min(100, Math.max(0, ((mrp - sr) / mrp) * 100)) : 0
+          next.saleRate = round2(sr)
+          next.discountPercent = round2(mrp > 0 ? Math.min(100, Math.max(0, ((mrp - Number(next.saleRate)) / mrp) * 100)) : 0)
         }
 
         return next
       }),
     )
-  }
-
-  function addRow() {
-    setRows((prev) => {
-      const next = [...prev, emptyRow()]
-      setActiveRow(next.length - 1)
-      return next
-    })
   }
 
   function addFromPicker(medicine, batch, qty) {
@@ -130,9 +132,9 @@ export default function SalesPage() {
       const effectiveSaleRatePack = overrideSaleRatePack === null ? saleRatePack : overrideSaleRatePack
       const effectiveDisc =
         qty && typeof qty.discountPercent === 'number'
-          ? Math.min(100, Math.max(0, Number(qty.discountPercent || 0)))
+          ? round2(Math.min(100, Math.max(0, Number(qty.discountPercent || 0))))
           : mrpPack > 0
-            ? Math.min(100, Math.max(0, ((mrpPack - effectiveSaleRatePack) / mrpPack) * 100))
+            ? round2(Math.min(100, Math.max(0, ((mrpPack - effectiveSaleRatePack) / mrpPack) * 100)))
             : 0
 
       function makeRow(unitType, quantity) {
@@ -149,8 +151,8 @@ export default function SalesPage() {
           unitsPerStrip,
           allowLooseSale,
           unitType,
-          mrp,
-          saleRate,
+          mrp: round2(mrp),
+          saleRate: round2(saleRate),
           discountPercent: effectiveDisc,
           finalPurchaseRate: Number(batch.finalPurchaseRate || 0),
           quantity: Math.max(1, Math.floor(Number(quantity || 1))),
@@ -197,14 +199,6 @@ export default function SalesPage() {
     })
   }
 
-  const search = useCallback(
-    async (q) => {
-      const res = await searchMedicines(token, q)
-      return res.items || []
-    },
-    [token],
-  )
-
   useEffect(() => {
     let mounted = true
     async function loadBatches() {
@@ -247,6 +241,15 @@ export default function SalesPage() {
     const net = Math.max(0, totals.amount - billDiscAmt)
     return { ...totals, billDiscPct, billDiscAmt, net }
   }, [rows, header.billDiscountPercent])
+
+  useEffect(() => {
+    setHeader((h) => {
+      if (h.paidTouched) return h
+      const nextPaid = Math.max(0, Number(summary.net || 0))
+      if (Math.abs(Number(h.paidAmount || 0) - nextPaid) < 1e-9) return h
+      return { ...h, paidAmount: nextPaid }
+    })
+  }, [summary.net])
 
   async function submit(e) {
     e.preventDefault()
@@ -300,6 +303,7 @@ export default function SalesPage() {
         saleDate: isoToday(),
         paymentType: 'Cash',
         paidAmount: 0,
+        paidTouched: false,
         billDiscountPercent: 0,
         patientName: '',
         phone: '',
@@ -316,12 +320,11 @@ export default function SalesPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <SiteHeader />
-      <main className="py-8">
-        <div className="mx-auto w-full px-6">
+      <main className="py-4">
+        <div className="mx-auto w-full px-4 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="min-w-[220px]">
               <div className="text-lg font-semibold tracking-tight">Sales Module</div>
-              <div className="mt-0.5 text-xs text-slate-400">FEFO batch selection • Role: {user?.role}</div>
             </div>
             <Link className="text-sm text-slate-300 hover:text-slate-100" to={`${base}/dashboard`}>
               Back
@@ -348,13 +351,135 @@ export default function SalesPage() {
                   <Button type="button" variant="secondary" onClick={() => setPickerOpen(true)}>
                     Add Medicine
                   </Button>
-                  <Button type="button" variant="secondary" onClick={addRow}>
-                    Add Row
-                  </Button>
+                  <Link
+                    className="inline-flex items-center justify-center gap-2 rounded-full bg-white/10 px-5 py-2.5 text-sm font-medium text-slate-100 ring-1 ring-inset ring-white/15 hover:bg-white/15"
+                    to={`${base}/sales/view`}
+                  >
+                    Sales Views
+                  </Link>
                 </div>
               </div>
 
-              <div className="mt-4 h-[34vh] overflow-x-auto overflow-y-auto">
+              <div className="mt-4 md:hidden">
+                {active ? (
+                  <div className="grid gap-3 rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-slate-100">{active.productName || 'Select medicine'}</div>
+                        <div className="mt-0.5 truncate text-xs text-slate-400">
+                          {(active.batchNumber ? `Batch ${active.batchNumber}` : '') + (active.expiryLabel ? ` - Exp ${active.expiryLabel}` : '')}
+                        </div>
+                      </div>
+                      <div className="text-right text-xs text-slate-400">
+                        Amt <span className="tabular-nums text-slate-100">{Number(activeTotals.amount || 0).toFixed(2)}</span>
+                      </div>
+                    </div>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Unit</span>
+                      <select
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10 disabled:opacity-60"
+                        value={active.unitType}
+                        onChange={(e) => updateRow(activeRow, { unitType: e.target.value })}
+                        disabled={!active.allowLooseSale}
+                      >
+                        <option value="pack">Pack</option>
+                        <option value="unit">Unit</option>
+                      </select>
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Disc%</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        max={100}
+                        step="0.01"
+                        value={Number(active.discountPercent || 0) === 0 ? '' : active.discountPercent}
+                        onChange={(e) => updateRow(activeRow, { discountPercent: e.target.value === '' ? 0 : Number(e.target.value) })}
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">S.R</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        step="0.01"
+                        value={Number(active.saleRate || 0) === 0 ? '' : active.saleRate}
+                        onChange={(e) => updateRow(activeRow, { saleRate: e.target.value === '' ? 0 : Number(e.target.value) })}
+                        required
+                      />
+                    </label>
+
+                    <label className="grid gap-1.5">
+                      <span className="text-xs font-medium text-slate-300">Qty</span>
+                      <input
+                        className="h-10 w-full rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                        type="number"
+                        min={0}
+                        step={active.unitType === 'unit' ? '1' : '0.01'}
+                        value={Number(active.quantity || 0) === 0 ? '' : active.quantity}
+                        onChange={(e) => updateRow(activeRow, { quantity: e.target.value === '' ? 0 : Number(e.target.value) })}
+                        required
+                      />
+                    </label>
+
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="danger"
+                        type="button"
+                        onClick={() => {
+                          if (rows.length <= 1) {
+                            setRows([emptyRow()])
+                            setActiveRow(0)
+                            return
+                          }
+                          removeRow(activeRow)
+                        }}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="mt-3 space-y-2">
+                  {(rows || [])
+                    .map((r, i) => ({ r, i }))
+                    .filter(({ r }) => Boolean(r.medicineId) || Boolean(String(r.productName || '').trim()))
+                    .map(({ r, i }) => (
+                      <div
+                        key={i}
+                        className={`rounded-2xl bg-slate-950/40 p-3 ring-1 ring-inset ring-white/10 ${i === activeRow ? 'ring-sky-400/40' : ''}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-sm font-semibold text-slate-100">{r.productName || '-'}</div>
+                            <div className="mt-0.5 truncate text-xs text-slate-400">
+                              {(r.batchNumber ? `Batch ${r.batchNumber}` : '') + (r.expiryLabel ? ` - Exp ${r.expiryLabel}` : '')}
+                            </div>
+                          </div>
+                          <div className="text-right text-xs text-slate-400">
+                            Qty <span className="tabular-nums text-slate-100">{Number(r.quantity || 0)}</span>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <Button variant="secondary" type="button" onClick={() => setActiveRow(i)}>
+                            Edit
+                          </Button>
+                          <Button variant="danger" type="button" onClick={() => removeRow(i)}>
+                            Delete
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              <div className="mt-4 hidden h-[34vh] overflow-x-auto overflow-y-auto md:block">
                 <table className="w-full min-w-[980px] table-fixed text-left text-xs">
                   <thead className="sticky top-0 z-10 bg-slate-950/80 uppercase tracking-wide text-slate-400 backdrop-blur">
                     <tr className="h-9">
@@ -379,7 +504,6 @@ export default function SalesPage() {
                         onChange={updateRow}
                         onRemove={removeRow}
                         onActivate={setActiveRow}
-                        search={search}
                       />
                     ))}
                   </tbody>
@@ -390,7 +514,7 @@ export default function SalesPage() {
             <div className="grid gap-6">
               <div className="rounded-3xl bg-white/5 p-4 ring-1 ring-inset ring-white/10">
                 <div className="text-sm font-semibold">Sale Details</div>
-                <div className="mt-3 grid grid-cols-12 items-end gap-2">
+                <div className="mt-3 grid grid-cols-1 items-end gap-2 sm:grid-cols-12">
                   <label className="grid gap-1.5 col-span-12 sm:col-span-6 lg:col-span-3">
                     <span className="text-xs font-medium text-slate-300">Patient Name</span>
                     <input
@@ -418,7 +542,7 @@ export default function SalesPage() {
                       placeholder="Optional"
                     />
                   </label>
-                  <label className="grid gap-1.5 col-span-6 sm:col-span-4 lg:col-span-2">
+                  <label className="grid gap-1.5 col-span-12 sm:col-span-4 lg:col-span-2">
                     <span className="text-xs font-medium text-slate-300">Sale Date</span>
                     <input
                       className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
@@ -428,7 +552,7 @@ export default function SalesPage() {
                       required
                     />
                   </label>
-                  <label className="grid gap-1.5 col-span-6 sm:col-span-4 lg:col-span-2">
+                  <label className="grid gap-1.5 col-span-12 sm:col-span-4 lg:col-span-2">
                     <span className="text-xs font-medium text-slate-300">Payment</span>
                     <select
                       className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
@@ -440,22 +564,6 @@ export default function SalesPage() {
                       <option value="UPI">UPI</option>
                       <option value="Credit">Credit</option>
                     </select>
-                  </label>
-                  <label className="grid gap-1.5 col-span-6 sm:col-span-4 lg:col-span-2">
-                    <span className="text-xs font-medium text-slate-300">Paid</span>
-                    <input
-                      className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
-                      type="number"
-                      min={0}
-                      step="0.01"
-                      value={Number(header.paidAmount || 0) === 0 ? '' : header.paidAmount}
-                      onKeyDown={(e) => {
-                        if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
-                      }}
-                      onChange={(e) =>
-                        setHeader((h) => ({ ...h, paidAmount: e.target.value === '' ? 0 : Number(e.target.value) }))
-                      }
-                    />
                   </label>
                   <label className="grid gap-1.5 col-span-12 lg:col-span-6">
                     <span className="text-xs font-medium text-slate-300">Remarks</span>
@@ -555,10 +663,30 @@ export default function SalesPage() {
                       <div>
                         Net: <span className="font-semibold text-slate-100">{summary.net.toFixed(2)}</span>
                       </div>
+                      <label className="flex items-end gap-2">
+                        <span>Paid:</span>
+                        <input
+                          className="h-9 w-28 rounded-xl bg-slate-950/40 px-3 text-sm text-slate-100 ring-1 ring-inset ring-white/10"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={Number(header.paidAmount || 0) === 0 ? '' : header.paidAmount}
+                          onKeyDown={(e) => {
+                            if (e.key === 'e' || e.key === 'E' || e.key === '+' || e.key === '-') e.preventDefault()
+                          }}
+                          onChange={(e) =>
+                            setHeader((h) => ({
+                              ...h,
+                              paidTouched: true,
+                              paidAmount: e.target.value === '' ? 0 : Number(e.target.value),
+                            }))
+                          }
+                        />
+                      </label>
                       <div>
-                        Profit:{' '}
-                        <span className={`font-semibold ${summary.profit >= 0 ? 'text-emerald-200' : 'text-rose-200'}`}>
-                          {summary.profit.toFixed(2)}
+                        Balance:{' '}
+                        <span className="font-semibold text-slate-100">
+                          {(Math.max(0, summary.net - Math.min(Math.max(0, Number(header.paidAmount || 0)), summary.net))).toFixed(2)}
                         </span>
                       </div>
                     </div>

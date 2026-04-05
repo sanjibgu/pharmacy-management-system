@@ -11,6 +11,7 @@ import {
   getMedicineUsage,
   listMedicines,
   searchMedicines,
+  setGlobalItemEnabled,
   updateMedicine,
 } from '../controllers/medicineController.js'
 
@@ -25,11 +26,23 @@ const createSchema = z.object({
   rackLocation: z.string().optional(),
   hsnCode: z.string().min(1),
   gstPercent: z.coerce.number().min(0),
-  unitsPerStrip: z.coerce.number().int().min(1),
-  allowLooseSale: z.coerce.boolean().default(false),
+  allowLooseSale: z.coerce.boolean().optional().default(false),
+  customFields: z.record(z.string(), z.unknown()).optional(),
 })
 
-const updateSchema = createSchema.partial()
+const updateSchema = z.object({
+  medicineName: z.string().min(2).optional(),
+  manufacturer: z.string().min(1).optional(),
+  dosageForm: z.string().optional(),
+  strength: z.string().optional(),
+  category: z.string().min(1).optional(),
+  rackLocation: z.string().optional(),
+  hsnCode: z.string().min(1).optional(),
+  gstPercent: z.coerce.number().min(0).optional(),
+  allowLooseSale: z.coerce.boolean().optional(),
+  isActive: z.coerce.boolean().optional(),
+  customFields: z.record(z.string(), z.unknown()).optional(),
+})
 
 router.get(
   '/search',
@@ -45,6 +58,15 @@ router.get(
   requireAuth,
   requireModuleAccess('medicines', 'view'),
   listMedicines,
+)
+
+router.patch(
+  '/global/:id',
+  requireTenant,
+  requireAuth,
+  requireModuleAccess('medicines', 'manage'),
+  validateBody(z.object({ isActive: z.coerce.boolean() })),
+  setGlobalItemEnabled,
 )
 router.get(
   '/:id/usage',

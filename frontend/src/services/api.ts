@@ -32,7 +32,30 @@ export async function apiFetch<T>(path: string, opts: ApiFetchOptions = {}): Pro
   const data = (await res.json().catch(() => ({}))) as unknown
   if (!res.ok) {
     const err = (data || { error: 'Request failed' }) as ApiError
-    const msg = String(err.error || 'Request failed')
+
+    let msg = String(err.error || 'Request failed')
+    if (msg === 'Validation error' && err.details) {
+      const details = Array.isArray(err.details) ? err.details : []
+      const rendered = details
+        .map((d) => {
+          const path = Array.isArray((d as any)?.path) ? (d as any).path.join('.') : ''
+          const message = String((d as any)?.message || '').trim()
+          if (!path && !message) return null
+          return path ? `${path}: ${message}` : message
+        })
+        .filter(Boolean)
+      if (rendered.length) msg = `Validation error: ${rendered.join(' | ')}`
+    }
+
+    if (res.status === 401) {
+      // Token expired/invalid: let AuthContext auto-logout and redirect via RequireAuth.
+      try {
+        window.dispatchEvent(new CustomEvent('auth:logout', { detail: { reason: msg } }))
+      } catch {
+        // ignore
+      }
+    }
+
     if (/E11000 duplicate key/i.test(msg) || /duplicate key error/i.test(msg)) {
       throw new Error('Already exists.')
     }

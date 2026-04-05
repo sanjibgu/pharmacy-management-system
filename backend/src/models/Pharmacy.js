@@ -15,8 +15,13 @@ const PharmacySchema = new mongoose.Schema(
       default: 'pending',
       index: true,
     },
+    // SuperAdmin can disable a pharmacy to block all tenant access.
+    isActive: { type: Boolean, required: true, default: true, index: true },
+    deactivationRemark: { type: String, trim: true, default: '' },
     slug: { type: String, trim: true, lowercase: true, unique: true, sparse: true },
     rejectionReason: { type: String, trim: true },
+    isDeleted: { type: Boolean, required: true, default: false, index: true },
+    deletedAt: { type: Date },
   },
   { timestamps: true },
 )

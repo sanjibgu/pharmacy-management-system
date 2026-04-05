@@ -4,15 +4,22 @@ import PharmacyRegistrationPage from './pages/PharmacyRegistrationPage'
 import LoginPage from './pages/LoginPage'
 import DashboardPage from './pages/DashboardPage'
 import MedicinesPage from './pages/MedicinesPage'
+import ManufacturersPage from './pages/ManufacturersPage'
 import PurchasePage from './pages/PurchasePage.jsx'
 import PurchasesViewPage from './pages/PurchasesViewPage'
 import SalesPage from './pages/SalesPage.jsx'
+import SalesViewPage from './pages/SalesViewPage'
+import SalesEditPage from './pages/SalesEditPage.jsx'
+import ProfitReportPage from './pages/ProfitReportPage'
+import ItemsSoldReportPage from './pages/ItemsSoldReportPage'
 import UsersPage from './pages/UsersPage'
 import DistributorsPage from './pages/DistributorsPage'
 import StocksPage from './pages/StocksPage'
 import SuperAdminLoginPage from './pages/SuperAdminLoginPage'
 import PendingPharmaciesPage from './pages/PendingPharmaciesPage'
 import CategoriesPage from './pages/CategoriesPage'
+import ApprovalsPage from './pages/ApprovalsPage'
+import PharmaciesPage from './pages/PharmaciesPage'
 import RequireAuth from './components/RequireAuth'
 import RequireRole from './components/RequireRole'
 import TenantLayout from './components/TenantLayout'
@@ -39,6 +46,14 @@ export default function App() {
         element={
           <RequireAuth>
             <MedicinesPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/manufacturers"
+        element={
+          <RequireAuth>
+            <ManufacturersPage />
           </RequireAuth>
         }
       />
@@ -83,6 +98,38 @@ export default function App() {
         }
       />
       <Route
+        path="/sales/view"
+        element={
+          <RequireAuth>
+            <SalesViewPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/reports/profit"
+        element={
+          <RequireAuth>
+            <ProfitReportPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/reports/items-sold"
+        element={
+          <RequireAuth>
+            <ItemsSoldReportPage />
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/sales/:id/edit"
+        element={
+          <RequireAuth>
+            <SalesEditPage />
+          </RequireAuth>
+        }
+      />
+      <Route
         path="/users"
         element={
           <RequireAuth>
@@ -112,6 +159,26 @@ export default function App() {
           </RequireAuth>
         }
       />
+      <Route
+        path="/superadmin/approvals"
+        element={
+          <RequireAuth loginPath="/superadmin/login">
+            <RequireRole role="SuperAdmin">
+              <ApprovalsPage />
+            </RequireRole>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/superadmin/pharmacies"
+        element={
+          <RequireAuth loginPath="/superadmin/login">
+            <RequireRole role="SuperAdmin">
+              <PharmaciesPage />
+            </RequireRole>
+          </RequireAuth>
+        }
+      />
 
       {/* Tenant routes: http://localhost:5173/{slug}/... */}
       <Route path="/:tenantSlug" element={<TenantLayout />}>
@@ -130,6 +197,14 @@ export default function App() {
           element={
             <RequireAuth>
               <MedicinesPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="manufacturers"
+          element={
+            <RequireAuth>
+              <ManufacturersPage />
             </RequireAuth>
           }
         />
@@ -170,6 +245,38 @@ export default function App() {
           element={
             <RequireAuth>
               <SalesPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="sales/view"
+          element={
+            <RequireAuth>
+              <SalesViewPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="reports/profit"
+          element={
+            <RequireAuth>
+              <ProfitReportPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="reports/items-sold"
+          element={
+            <RequireAuth>
+              <ItemsSoldReportPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="sales/:id/edit"
+          element={
+            <RequireAuth>
+              <SalesEditPage />
             </RequireAuth>
           }
         />

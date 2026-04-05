@@ -11,6 +11,12 @@ function fmtExpiryLabel(dateStr) {
   return `${dd}/${mm}/${yyyy}`
 }
 
+function round2(n) {
+  const v = Number(n || 0)
+  if (!Number.isFinite(v)) return 0
+  return Number(v.toFixed(2))
+}
+
 export default function MedicinePickerModal({ open, token, onClose, onPickBatch }) {
   const [query, setQuery] = useState('')
   const [loading, setLoading] = useState(false)
@@ -196,9 +202,9 @@ export default function MedicinePickerModal({ open, token, onClose, onPickBatch 
                             const disc =
                               discRaw === '' || discRaw == null
                                 ? mrpPack > 0
-                                  ? Math.min(100, Math.max(0, ((mrpPack - saleRatePack) / mrpPack) * 100))
+                                  ? round2(Math.min(100, Math.max(0, ((mrpPack - saleRatePack) / mrpPack) * 100)))
                                   : 0
-                                : Math.min(100, Math.max(0, Number(discRaw)))
+                                : round2(Math.min(100, Math.max(0, Number(discRaw))))
 
                             const currentSig = allowLooseSale ? `${packQty}|${unitQty}` : String(packQty)
                             const addedSig = addedSigByBatchKey[batchSigKey] || null
@@ -321,10 +327,10 @@ export default function MedicinePickerModal({ open, token, onClose, onPickBatch 
                                       }}
                                       onChange={(e) => {
                                         const raw = e.target.value === '' ? '' : Number(e.target.value)
-                                        const nextDisc = raw === '' ? '' : Math.min(100, Math.max(0, Number(raw)))
+                                        const nextDisc = raw === '' ? '' : round2(Math.min(100, Math.max(0, Number(raw))))
                                         setDiscByBatchKey((prev) => ({ ...prev, [batchSigKey]: nextDisc }))
                                         if (mrpPack > 0 && nextDisc !== '') {
-                                          const nextSaleRate = Math.max(0, mrpPack - (mrpPack * Number(nextDisc)) / 100)
+                                          const nextSaleRate = round2(Math.max(0, mrpPack - (mrpPack * Number(nextDisc)) / 100))
                                           setSaleRatePackByBatchKey((prev) => ({ ...prev, [batchSigKey]: nextSaleRate }))
                                         }
                                       }}
@@ -344,10 +350,12 @@ export default function MedicinePickerModal({ open, token, onClose, onPickBatch 
                                       }}
                                       onChange={(e) => {
                                         const raw = e.target.value === '' ? '' : Number(e.target.value)
-                                        const nextSaleRate = raw === '' ? '' : Math.max(0, Number(raw))
+                                        const nextSaleRate = raw === '' ? '' : round2(Math.max(0, Number(raw)))
                                         setSaleRatePackByBatchKey((prev) => ({ ...prev, [batchSigKey]: nextSaleRate }))
                                         if (mrpPack > 0 && nextSaleRate !== '') {
-                                          const nextDisc = Math.min(100, Math.max(0, ((mrpPack - Number(nextSaleRate)) / mrpPack) * 100))
+                                          const nextDisc = round2(
+                                            Math.min(100, Math.max(0, ((mrpPack - Number(nextSaleRate)) / mrpPack) * 100)),
+                                          )
                                           setDiscByBatchKey((prev) => ({ ...prev, [batchSigKey]: nextDisc }))
                                         }
                                       }}

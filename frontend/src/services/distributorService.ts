@@ -7,10 +7,15 @@ export type Distributor = {
   address: string
   mobileNumber?: string
   email?: string
+  isActive?: boolean
 }
 
 export async function listDistributors(token: string | null) {
   return apiFetch<{ items: Distributor[] }>('/api/suppliers', { token })
+}
+
+export async function listDistributorsAll(token: string | null) {
+  return apiFetch<{ items: Distributor[] }>('/api/suppliers?includeInactive=1', { token })
 }
 
 export async function createDistributor(token: string | null, body: Partial<Distributor>) {
@@ -29,3 +34,10 @@ export async function deleteDistributor(token: string | null, id: string) {
   return apiFetch<{ ok: true }>(`/api/suppliers/${id}`, { method: 'DELETE', token })
 }
 
+export async function setDistributorActive(token: string | null, id: string, isActive: boolean) {
+  return apiFetch<{ item: Distributor }>(`/api/suppliers/${id}/active`, {
+    method: 'PATCH',
+    token,
+    body: { isActive },
+  })
+}

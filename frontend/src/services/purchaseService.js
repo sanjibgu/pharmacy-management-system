@@ -8,8 +8,11 @@ export function createSupplier(token, payload) {
   return apiFetch('/api/suppliers', { method: 'POST', token, body: payload })
 }
 
-export function searchMedicines(token, q) {
-  const qs = new URLSearchParams({ q: q || '' }).toString()
+export function searchMedicines(token, q, categoryName, manufacturer) {
+  const params = new URLSearchParams({ q: q || '' })
+  if (categoryName) params.set('category', categoryName)
+  if (manufacturer) params.set('manufacturer', manufacturer)
+  const qs = params.toString()
   return apiFetch(`/api/medicines/search?${qs}`, { token })
 }
 

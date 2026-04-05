@@ -19,8 +19,13 @@ const MedicineSchema = new mongoose.Schema(
     hsnCode: { type: String, required: true, trim: true, default: '' },
     gstPercent: { type: Number, required: true, min: 0, default: 0 },
     // Pack details (e.g., 10 tablets per strip). Used later for loose/partial sales.
-    unitsPerStrip: { type: Number, required: true, min: 1, default: 10 },
+    unitsPerStrip: { type: Number, min: 1, default: 10 },
     allowLooseSale: { type: Boolean, required: true, default: false },
+    // Category-driven dynamic fields (configured by SuperAdmin in Category Master)
+    // Example for Diaper category: { size: "M", packOf: 42 }
+    customFields: { type: mongoose.Schema.Types.Mixed, default: {} },
+    globalItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'GlobalItem', index: true },
+    isActive: { type: Boolean, required: true, default: true, index: true },
     isDeleted: { type: Boolean, required: true, default: false, index: true },
     deletedAt: { type: Date },
   },

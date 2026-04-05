@@ -11,7 +11,13 @@
     "migrate:pharmacyadmin-access": "node src/scripts/backfillPharmacyAdminAccess.js",
     "migrate:medicine-rack": "node src/scripts/backfillMedicineRack.js",
     "migrate:medicine-composite-index": "node src/scripts/migrateMedicineCompositeIndex.js",
-    "migrate:supplier-dl-unique": "node src/scripts/migrateSupplierDlUniqueIndex.js"
+    "migrate:supplier-dl-unique": "node src/scripts/migrateSupplierDlUniqueIndex.js",
+    "migrate:category-unique-active": "node src/scripts/migrateCategoryUniqueIndex.js",
+    "migrate:dedupe-tenant-manufacturers": "node src/scripts/dedupeTenantManufacturers.js",
+    "migrate:manufacturers-to-global-mapping": "node src/scripts/migrateManufacturersToGlobalMapping.js",
+    "migrate:items-to-global-mapping": "node src/scripts/migrateItemsToGlobalMapping.js",
+    "backfill:approvals": "node src/scripts/backfillApprovalRequests.js",
+    "propagate:globals": "node src/scripts/propagateApprovedGlobals.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

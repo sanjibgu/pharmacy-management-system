@@ -16,7 +16,7 @@ const createSchema = z.object({
   phone: z.string().min(6).optional(),
   password: z.string().min(8),
   role: z.enum(['PharmacyAdmin', 'Staff']).default('Staff'),
-  moduleAccess: z.record(z.any()).optional(),
+  moduleAccess: z.record(z.string(), z.unknown()).optional(),
 })
 
 router.post(
@@ -29,7 +29,7 @@ router.post(
 )
 
 const accessSchema = z.object({
-  moduleAccess: z.record(z.any()),
+  moduleAccess: z.record(z.string(), z.unknown()),
 })
 
 router.patch(
@@ -42,4 +42,3 @@ router.patch(
 )
 
 export default router
-
