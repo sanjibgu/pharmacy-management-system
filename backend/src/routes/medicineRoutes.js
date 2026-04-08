@@ -26,6 +26,7 @@ const createSchema = z.object({
   rackLocation: z.string().optional(),
   hsnCode: z.string().min(1),
   gstPercent: z.coerce.number().min(0),
+  unitsPerStrip: z.coerce.number().min(1).optional(),
   allowLooseSale: z.coerce.boolean().optional().default(false),
   customFields: z.record(z.string(), z.unknown()).optional(),
 })
@@ -39,6 +40,7 @@ const updateSchema = z.object({
   rackLocation: z.string().optional(),
   hsnCode: z.string().min(1).optional(),
   gstPercent: z.coerce.number().min(0).optional(),
+  unitsPerStrip: z.coerce.number().min(1).optional(),
   allowLooseSale: z.coerce.boolean().optional(),
   isActive: z.coerce.boolean().optional(),
   customFields: z.record(z.string(), z.unknown()).optional(),

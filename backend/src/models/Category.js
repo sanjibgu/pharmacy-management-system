@@ -26,6 +26,11 @@ const CategorySchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     nameLower: { type: String, required: true, trim: true, index: true },
     fields: { type: [CategoryFieldSchema], default: [] },
+    // Which fields define "uniqueness" for items in this category.
+    // Keys can refer to either:
+    // - built-in item fields (e.g. dosageForm, strength, unitsPerStrip)
+    // - customFields keys (e.g. size, packOf)
+    uniqueFields: { type: [String], default: [] },
     looseSaleAllowed: { type: Boolean, required: true, default: false },
     isDeleted: { type: Boolean, required: true, default: false, index: true },
   },
@@ -47,6 +52,19 @@ CategorySchema.pre('validate', function preValidate(next) {
   const name = normalizeName(this.name)
   this.name = name
   this.nameLower = name.toLowerCase()
+
+  if (Array.isArray(this.uniqueFields)) {
+    const seen = new Set()
+    this.uniqueFields = this.uniqueFields
+      .map((k) => normalizeKey(k))
+      .filter(Boolean)
+      .filter((k) => {
+        const keyLower = String(k).toLowerCase()
+        if (seen.has(keyLower)) return false
+        seen.add(keyLower)
+        return true
+      })
+  }
 
   if (Array.isArray(this.fields)) {
     const seen = new Set()

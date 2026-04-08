@@ -20,6 +20,7 @@ import PendingPharmaciesPage from './pages/PendingPharmaciesPage'
 import CategoriesPage from './pages/CategoriesPage'
 import ApprovalsPage from './pages/ApprovalsPage'
 import PharmaciesPage from './pages/PharmaciesPage'
+import ChangePasswordPage from './pages/ChangePasswordPage'
 import RequireAuth from './components/RequireAuth'
 import RequireRole from './components/RequireRole'
 import TenantLayout from './components/TenantLayout'
@@ -137,6 +138,14 @@ export default function App() {
           </RequireAuth>
         }
       />
+      <Route
+        path="/change-password"
+        element={
+          <RequireAuth>
+            <ChangePasswordPage />
+          </RequireAuth>
+        }
+      />
 
       <Route path="/superadmin/login" element={<SuperAdminLoginPage />} />
       <Route
@@ -175,6 +184,16 @@ export default function App() {
           <RequireAuth loginPath="/superadmin/login">
             <RequireRole role="SuperAdmin">
               <PharmaciesPage />
+            </RequireRole>
+          </RequireAuth>
+        }
+      />
+      <Route
+        path="/superadmin/change-password"
+        element={
+          <RequireAuth loginPath="/superadmin/login">
+            <RequireRole role="SuperAdmin">
+              <ChangePasswordPage />
             </RequireRole>
           </RequireAuth>
         }
@@ -285,6 +304,14 @@ export default function App() {
           element={
             <RequireAuth>
               <UsersPage />
+            </RequireAuth>
+          }
+        />
+        <Route
+          path="change-password"
+          element={
+            <RequireAuth>
+              <ChangePasswordPage />
             </RequireAuth>
           }
         />

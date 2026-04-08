@@ -2,7 +2,11 @@ import mongoose from 'mongoose'
 import { Medicine } from '../models/Medicine.js'
 import { PurchaseItem } from '../models/PurchaseItem.js'
 import { Stock } from '../models/Stock.js'
-import { coerceCustomFieldsForCategory, getLooseSaleAllowedForCategory } from '../services/customFieldsService.js'
+import {
+  coerceCustomFieldsForCategory,
+  getLooseSaleAllowedForCategory,
+  getUniqueFieldsForCategory,
+} from '../services/customFieldsService.js'
 import { GlobalItem } from '../models/GlobalItem.js'
 import { ApprovalRequest } from '../models/ApprovalRequest.js'
 import { makeItemKey } from '../services/normalizeService.js'
@@ -41,14 +45,16 @@ export async function listMedicines(req, res) {
         _id: g._id,
         medicineName: g.medicineName,
         manufacturer: g.manufacturer,
-        dosageForm: '',
-        strength: '',
+        dosageForm: g.dosageForm || '',
+        strength: g.strength || '',
         category: g.category,
         rackLocation: g.rackLocation || '',
         hsnCode: g.hsnCode || '',
         gstPercent: Number(g.gstPercent || 0),
         allowLooseSale: Boolean(g.allowLooseSale),
+        unitsPerStrip: Number(g.unitsPerStrip || 1),
         customFields: g.customFields || {},
+        variantKey: String(g.normalizedKey || '').trim(),
         isActive: enabled,
         source: 'global',
       }
@@ -57,15 +63,27 @@ export async function listMedicines(req, res) {
 
   const locals = localItems.map((m) => ({ ...m, source: 'local' }))
 
-  // Dedupe by normalized key (prefer local).
-  const seen = new Set()
-  const out = []
-  for (const m of [...locals, ...globalItems]) {
-    const key = makeItemKey({ medicineName: m.medicineName, manufacturer: m.manufacturer, category: m.category })
-    if (!key) continue
-    if (seen.has(key)) continue
-    seen.add(key)
-    out.push(m)
+  // Merge with global catalog, but never collapse distinct tenant-local items.
+  // Use variantKey (preferred) to avoid duplicates between local and global; fall back safely.
+  const localKeySet = new Set()
+  for (const m of locals) {
+    const key =
+      String(m.variantKey || '').trim() ||
+      makeItemKey({ medicineName: m.medicineName, manufacturer: m.manufacturer, category: m.category })
+    if (key) localKeySet.add(key)
+  }
+
+  const out = [...locals]
+  const seenGlobal = new Set()
+  for (const g of globalItems) {
+    const gKey =
+      String(g.variantKey || '').trim() ||
+      makeItemKey({ medicineName: g.medicineName, manufacturer: g.manufacturer, category: g.category })
+    if (!gKey) continue
+    if (localKeySet.has(gKey)) continue
+    if (seenGlobal.has(gKey)) continue
+    seenGlobal.add(gKey)
+    out.push(g)
   }
 
   res.json({ items: out })
@@ -75,14 +93,19 @@ export async function createMedicine(req, res) {
   const pharmacyId = req.user.pharmacyId
   try {
     const { customFields, category, ...rest } = req.validatedBody
-    const normalizedKey = makeItemKey({
-      medicineName: rest.medicineName,
-      manufacturer: rest.manufacturer,
+
+    const coercedCustomFields = await coerceCustomFieldsForCategory(category, customFields)
+    const uniqueFields = await getUniqueFieldsForCategory(category)
+
+    const variantKey = makeItemKey({
+      ...rest,
       category,
+      customFields: coercedCustomFields,
+      uniqueFields,
     })
 
     const globalExists = await GlobalItem.findOne({
-      normalizedKey,
+      normalizedKey: variantKey,
       isDeleted: { $ne: true },
       status: 'active',
     }).lean()
@@ -93,7 +116,6 @@ export async function createMedicine(req, res) {
       })
     }
 
-    const coercedCustomFields = await coerceCustomFieldsForCategory(category, customFields)
     const looseSaleAllowed = await getLooseSaleAllowedForCategory(category)
     const allowLooseSale = looseSaleAllowed ? Boolean(rest.allowLooseSale) : false
 
@@ -102,6 +124,7 @@ export async function createMedicine(req, res) {
       allowLooseSale,
       category,
       customFields: coercedCustomFields,
+      variantKey,
       globalItemId: null,
       isActive: true,
       pharmacyId,
@@ -110,13 +133,16 @@ export async function createMedicine(req, res) {
     try {
       await ApprovalRequest.create({
         entityType: 'item',
-        normalizedKey,
+        normalizedKey: variantKey,
         requestedByPharmacyId: pharmacyId,
         requestedByUserId: req.user.id,
         localEntityId: medicine._id,
         payload: {
           medicineName: medicine.medicineName,
           manufacturer: medicine.manufacturer,
+          dosageForm: medicine.dosageForm || '',
+          strength: medicine.strength || '',
+          unitsPerStrip: Number(medicine.unitsPerStrip || 0),
           category: medicine.category,
           rackLocation: medicine.rackLocation,
           hsnCode: medicine.hsnCode,
@@ -177,6 +203,57 @@ export async function updateMedicine(req, res) {
       ? Boolean(req.validatedBody.allowLooseSale)
       : Boolean(existing.allowLooseSale)
     req.validatedBody.allowLooseSale = looseSaleAllowed ? incomingAllow : false
+  }
+
+  // Recompute variantKey whenever any relevant attributes change (or if it was missing).
+  const affectsKey =
+    !existing.variantKey ||
+    Object.prototype.hasOwnProperty.call(req.validatedBody, 'medicineName') ||
+    Object.prototype.hasOwnProperty.call(req.validatedBody, 'manufacturer') ||
+    Object.prototype.hasOwnProperty.call(req.validatedBody, 'category') ||
+    Object.prototype.hasOwnProperty.call(req.validatedBody, 'dosageForm') ||
+    Object.prototype.hasOwnProperty.call(req.validatedBody, 'strength') ||
+    Object.prototype.hasOwnProperty.call(req.validatedBody, 'unitsPerStrip') ||
+    Object.prototype.hasOwnProperty.call(req.validatedBody, 'customFields')
+
+  if (affectsKey) {
+    const next = {
+      medicineName: Object.prototype.hasOwnProperty.call(req.validatedBody, 'medicineName')
+        ? req.validatedBody.medicineName
+        : existing.medicineName,
+      manufacturer: Object.prototype.hasOwnProperty.call(req.validatedBody, 'manufacturer')
+        ? req.validatedBody.manufacturer
+        : existing.manufacturer,
+      dosageForm: Object.prototype.hasOwnProperty.call(req.validatedBody, 'dosageForm')
+        ? req.validatedBody.dosageForm
+        : existing.dosageForm,
+      strength: Object.prototype.hasOwnProperty.call(req.validatedBody, 'strength')
+        ? req.validatedBody.strength
+        : existing.strength,
+      unitsPerStrip: Object.prototype.hasOwnProperty.call(req.validatedBody, 'unitsPerStrip')
+        ? req.validatedBody.unitsPerStrip
+        : existing.unitsPerStrip,
+      category: nextCategory,
+      customFields: Object.prototype.hasOwnProperty.call(req.validatedBody, 'customFields')
+        ? req.validatedBody.customFields
+        : existing.customFields,
+    }
+
+    const uniqueFields = await getUniqueFieldsForCategory(nextCategory)
+    const nextVariantKey = makeItemKey({ ...next, uniqueFields })
+
+    // If updating a local-only item to match a Global item, block and ask user to enable global instead.
+    const global = await GlobalItem.findOne({ normalizedKey: nextVariantKey, isDeleted: { $ne: true }, status: 'active' })
+      .select({ _id: 1 })
+      .lean()
+    if (global && (!existing.globalItemId || String(existing.globalItemId) !== String(global._id))) {
+      return res.status(409).json({
+        error: 'This item is already available in the Global list. Please enable it in your pharmacy instead of creating a duplicate.',
+        globalItemId: String(global._id),
+      })
+    }
+
+    req.validatedBody.variantKey = nextVariantKey
   }
 
   let item
@@ -298,20 +375,18 @@ export async function searchMedicines(req, res) {
     const enabled = settingByGlobalId.has(String(g._id)) ? settingByGlobalId.get(String(g._id)) : true
     if (!enabled) continue
 
+    const gKey = String(g.normalizedKey || '').trim()
+
     // eslint-disable-next-line no-await-in-loop
     let local = await Medicine.findOne({ pharmacyId, globalItemId: g._id, isDeleted: { $ne: true } }).lean()
     if (!local) {
-      // Try to link an existing local item by same (name+manufacturer+category) before creating new.
+      // Try to link an existing local item by variantKey before creating new.
       // eslint-disable-next-line no-await-in-loop
-      const byKey = await Medicine.findOne({
-        pharmacyId,
-        isDeleted: { $ne: true },
-        medicineName: g.medicineName,
-        manufacturer: g.manufacturer,
-        category: g.category,
-      })
-        .collation({ locale: 'en', strength: 2 })
-        .lean()
+      const byKey = gKey
+        ? await Medicine.findOne({ pharmacyId, isDeleted: { $ne: true }, variantKey: gKey })
+            .collation({ locale: 'en', strength: 2 })
+            .lean()
+        : null
 
       if (byKey) {
         // eslint-disable-next-line no-await-in-loop
@@ -326,14 +401,16 @@ export async function searchMedicines(req, res) {
           pharmacyId,
           medicineName: g.medicineName,
           manufacturer: g.manufacturer,
-          dosageForm: '',
-          strength: '',
+          dosageForm: g.dosageForm || '',
+          strength: g.strength || '',
           category: g.category,
           rackLocation: g.rackLocation || '',
           hsnCode: g.hsnCode || '',
           gstPercent: Number(g.gstPercent || 0),
           allowLooseSale: Boolean(g.allowLooseSale),
+          unitsPerStrip: Number(g.unitsPerStrip || 1),
           customFields: g.customFields || {},
+          variantKey: gKey,
           globalItemId: g._id,
           isActive: true,
           isDeleted: false,
@@ -344,13 +421,14 @@ export async function searchMedicines(req, res) {
     ensured.push(local)
   }
 
-  // Merge/dedupe (prefer tenant-local active items)
+  // Merge/dedupe by _id only (do not collapse item variants).
   const seen = new Set()
   const merged = []
   for (const m of [...localItems, ...ensured]) {
-    const key = makeItemKey({ medicineName: m.medicineName, manufacturer: m.manufacturer, category: m.category })
-    if (seen.has(key)) continue
-    seen.add(key)
+    const id = String(m?._id || '')
+    if (!id) continue
+    if (seen.has(id)) continue
+    seen.add(id)
     merged.push(m)
   }
 

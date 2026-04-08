@@ -14,6 +14,9 @@ const MedicineSchema = new mongoose.Schema(
     dosageForm: { type: String, trim: true, default: '' },
     strength: { type: String, trim: true, default: '' },
     category: { type: String, required: true, trim: true, default: '' },
+    // Normalized uniqueness key computed from (name + manufacturer + category + category.uniqueFields).
+    // This supports category-specific uniqueness (e.g. Diaper size/packOf, Tablet strength, etc.).
+    variantKey: { type: String, trim: true, default: '', index: true },
     // Default rack/location for this medicine (can be overridden per batch in purchase).
     rackLocation: { type: String, trim: true, default: '' },
     hsnCode: { type: String, required: true, trim: true, default: '' },
@@ -34,11 +37,11 @@ const MedicineSchema = new mongoose.Schema(
 
 MedicineSchema.index({ pharmacyId: 1, medicineName: 1 })
 MedicineSchema.index(
-  { pharmacyId: 1, medicineName: 1, manufacturer: 1, category: 1 },
+  { pharmacyId: 1, variantKey: 1 },
   {
-    name: 'uniq_medicine_pharmacy_name_manufacturer_category',
+    name: 'uniq_medicine_pharmacy_variantKey',
     unique: true,
-    partialFilterExpression: { isDeleted: false },
+    partialFilterExpression: { isDeleted: false, variantKey: { $type: 'string', $ne: '' } },
     collation: { locale: 'en', strength: 2 },
   },
 )

@@ -19,11 +19,12 @@ export async function listCategories(req, res) {
 export async function createCategory(req, res) {
   const name = normalizeName(req.validatedBody.name)
   const fields = Array.isArray(req.validatedBody.fields) ? req.validatedBody.fields : []
+  const uniqueFields = Array.isArray(req.validatedBody.uniqueFields) ? req.validatedBody.uniqueFields : []
   const looseSaleAllowed = Boolean(req.validatedBody.looseSaleAllowed)
   if (!name) return res.status(400).json({ error: 'Category name is required' })
 
   try {
-    const doc = await Category.create({ name, fields, looseSaleAllowed, isDeleted: false })
+    const doc = await Category.create({ name, fields, uniqueFields, looseSaleAllowed, isDeleted: false })
     res.status(201).json({ category: doc })
   } catch (err) {
     if (err && typeof err === 'object' && err.code === 11000) {
@@ -37,13 +38,14 @@ export async function updateCategory(req, res) {
   const id = new mongoose.Types.ObjectId(req.params.id)
   const name = normalizeName(req.validatedBody.name)
   const fields = Array.isArray(req.validatedBody.fields) ? req.validatedBody.fields : []
+  const uniqueFields = Array.isArray(req.validatedBody.uniqueFields) ? req.validatedBody.uniqueFields : []
   const looseSaleAllowed = Boolean(req.validatedBody.looseSaleAllowed)
   if (!name) return res.status(400).json({ error: 'Category name is required' })
 
   try {
     const doc = await Category.findByIdAndUpdate(
       id,
-      { name, fields, looseSaleAllowed },
+      { name, fields, uniqueFields, looseSaleAllowed },
       { new: true, runValidators: true },
     )
     if (!doc) return res.status(404).json({ error: 'Category not found' })

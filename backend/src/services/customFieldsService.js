@@ -102,3 +102,12 @@ export async function getLooseSaleAllowedForCategory(categoryName) {
   const category = await Category.findOne({ nameLower, isDeleted: { $ne: true } }).lean()
   return Boolean(category?.looseSaleAllowed)
 }
+
+export async function getUniqueFieldsForCategory(categoryName) {
+  const nameLower = (categoryName || '').toString().trim().toLowerCase()
+  if (!nameLower) return []
+  const category = await Category.findOne({ nameLower, isDeleted: { $ne: true } })
+    .select({ uniqueFields: 1 })
+    .lean()
+  return Array.isArray(category?.uniqueFields) ? category.uniqueFields : []
+}

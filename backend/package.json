@@ -17,7 +17,9 @@
     "migrate:manufacturers-to-global-mapping": "node src/scripts/migrateManufacturersToGlobalMapping.js",
     "migrate:items-to-global-mapping": "node src/scripts/migrateItemsToGlobalMapping.js",
     "backfill:approvals": "node src/scripts/backfillApprovalRequests.js",
-    "propagate:globals": "node src/scripts/propagateApprovedGlobals.js"
+    "propagate:globals": "node src/scripts/propagateApprovedGlobals.js",
+    "audit:collections": "node src/scripts/auditMongoCollections.js",
+    "db:drop-collections": "node src/scripts/dropMongoCollections.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

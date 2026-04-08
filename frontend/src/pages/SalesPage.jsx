@@ -5,6 +5,7 @@ import MedicinePickerModal from '../components/MedicinePickerModal'
 import SiteHeader from '../components/SiteHeader'
 import SaleItemRow from '../components/SaleItemRow'
 import { useAuth } from '../context/AuthContext'
+import { clearDraft, loadDraft, makeDraftKey, saveDraft } from '../services/draftStorage'
 import { createSale, getSaleBatches } from '../services/salesService'
 import { getTenantSlug } from '../services/tenant'
 
@@ -44,6 +45,31 @@ function emptyRow() {
     finalPurchaseRate: 0,
     quantity: 0,
   }
+}
+
+function isRowEmpty(r) {
+  if (!r) return true
+  const hasText =
+    Boolean(String(r.productName || '').trim()) ||
+    Boolean(String(r.medicineId || '').trim()) ||
+    Boolean(String(r.batchNumber || '').trim())
+  if (hasText) return false
+  const qty = Number(r.quantity || 0)
+  return !Number.isFinite(qty) || qty === 0
+}
+
+function isDraftEmpty(draft) {
+  if (!draft) return true
+  const h = draft.header || {}
+  const headerHas =
+    Boolean(String(h.patientName || '').trim()) ||
+    Boolean(String(h.phone || '').trim()) ||
+    Boolean(String(h.doctorName || '').trim()) ||
+    Boolean(String(h.remarks || '').trim()) ||
+    Number(h.billDiscountPercent || 0) !== 0
+  if (headerHas) return false
+  const rs = Array.isArray(draft.rows) ? draft.rows : []
+  return rs.every((r) => isRowEmpty(r))
 }
 
 function lineTotals(r) {
@@ -89,6 +115,91 @@ export default function SalesPage() {
   const [batchLoading, setBatchLoading] = useState(false)
   const [batches, setBatches] = useState([])
   const [pickerOpen, setPickerOpen] = useState(false)
+
+  const draftKey = useMemo(() => makeDraftKey({ kind: 'saleDraft', tenantSlug: effectiveSlug || getTenantSlug(), userId: user?.id }), [
+    effectiveSlug,
+    user?.id,
+  ])
+  const [draftRestored, setDraftRestored] = useState(false)
+
+  const resetForm = useCallback(() => {
+    clearDraft(draftKey)
+    setDraftRestored(false)
+    setRows([emptyRow()])
+    setActiveRow(0)
+    setHeader({
+      saleDate: isoToday(),
+      paymentType: 'Cash',
+      paidAmount: 0,
+      paidTouched: false,
+      billDiscountPercent: 0,
+      patientName: '',
+      phone: '',
+      doctorName: '',
+      remarks: '',
+    })
+    setError(null)
+    setSuccess(false)
+  }, [draftKey])
+
+  // Restore draft only if current form is empty (new session).
+  useEffect(() => {
+    if (!draftKey) return
+    const draft = loadDraft(draftKey)
+    if (!draft || isDraftEmpty(draft)) return
+    const currentEmpty = isDraftEmpty({ header, rows })
+    if (!currentEmpty) return
+
+    const nextHeader = {
+      saleDate: String(draft?.header?.saleDate || isoToday()),
+      paymentType: String(draft?.header?.paymentType || 'Cash'),
+      paidAmount: Number(draft?.header?.paidAmount || 0),
+      paidTouched: Boolean(draft?.header?.paidTouched),
+      billDiscountPercent: Number(draft?.header?.billDiscountPercent || 0),
+      patientName: String(draft?.header?.patientName || ''),
+      phone: String(draft?.header?.phone || ''),
+      doctorName: String(draft?.header?.doctorName || ''),
+      remarks: String(draft?.header?.remarks || ''),
+    }
+
+    const nextRowsRaw = Array.isArray(draft.rows) ? draft.rows : []
+    const nextRows = nextRowsRaw.map((r) => ({
+      ...emptyRow(),
+      ...r,
+      unitsPerStrip: Math.max(1, Number(r?.unitsPerStrip || 1)),
+      mrp: Number(r?.mrp || 0),
+      saleRate: Number(r?.saleRate || 0),
+      discountPercent: Number(r?.discountPercent || 0),
+      finalPurchaseRate: Number(r?.finalPurchaseRate || 0),
+      quantity: Number(r?.quantity || 0),
+    }))
+    if (!nextRows.length) nextRows.push(emptyRow())
+
+    setHeader(nextHeader)
+    setRows(nextRows)
+    setActiveRow(Math.max(0, Math.min(Number(draft.activeRow || 0), nextRows.length - 1)))
+    setDraftRestored(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey])
+
+  // Autosave locally (debounced).
+  useEffect(() => {
+    if (!draftKey) return
+    if (!token || !user?.id) return
+    if (saving) return
+
+    const t = window.setTimeout(() => {
+      const compactRows = Array.isArray(rows) ? rows.filter((r) => !isRowEmpty(r)) : []
+      const payload = { v: 1, updatedAt: Date.now(), header, rows: compactRows, activeRow }
+      if (isDraftEmpty(payload)) {
+        clearDraft(draftKey)
+      } else {
+        saveDraft(draftKey, payload)
+      }
+    }, 800)
+
+    return () => window.clearTimeout(t)
+  }, [draftKey, token, user?.id, saving, header, rows, activeRow])
 
   function updateRow(index, patch) {
     setSuccess(false)
@@ -296,6 +407,7 @@ export default function SalesPage() {
         items,
       })
 
+      clearDraft(draftKey)
       setSuccess(true)
       setRows([emptyRow()])
       setActiveRow(0)
@@ -310,6 +422,7 @@ export default function SalesPage() {
         doctorName: '',
         remarks: '',
       })
+      setDraftRestored(false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save sale')
     } finally {
@@ -340,6 +453,21 @@ export default function SalesPage() {
           {success ? (
             <div className="mt-4 rounded-2xl bg-emerald-500/10 p-4 text-sm text-emerald-200 ring-1 ring-inset ring-emerald-400/20">
               Sale saved. Stock updated.
+            </div>
+          ) : null}
+
+          {draftRestored ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-sky-500/10 p-3 text-sm text-sky-200 ring-1 ring-inset ring-sky-400/20">
+              <div>Draft restored (auto-saved).</div>
+              <button
+                type="button"
+                className="rounded-xl bg-white/5 px-3 py-2 text-xs ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                onClick={() => {
+                  resetForm()
+                }}
+              >
+                Discard
+              </button>
             </div>
           ) : null}
 
@@ -692,7 +820,19 @@ export default function SalesPage() {
                     </div>
                   </div>
 
-                  <div className="mt-4 flex justify-end">
+                  <div className="mt-4 flex justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        const ok = window.confirm('Reset the form and clear any auto-saved draft?')
+                        if (!ok) return
+                        resetForm()
+                      }}
+                      disabled={saving}
+                    >
+                      Reset
+                    </Button>
                     <Button type="submit" disabled={saving}>
                       {saving ? 'Saving…' : 'Save Sale'}
                     </Button>

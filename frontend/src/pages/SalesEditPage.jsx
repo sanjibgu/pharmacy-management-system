@@ -6,6 +6,7 @@ import SiteHeader from '../components/SiteHeader'
 import SaleItemRow from '../components/SaleItemRow'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../services/api'
+import { clearDraft, loadDraft, makeDraftKey, saveDraft } from '../services/draftStorage'
 import { getSaleBatches } from '../services/salesService'
 import { getTenantSlug } from '../services/tenant'
 
@@ -45,6 +46,32 @@ function emptyRow() {
     finalPurchaseRate: 0,
     quantity: 0,
   }
+}
+
+function isRowEmpty(r) {
+  if (!r) return true
+  const hasText =
+    Boolean(String(r.productName || '').trim()) ||
+    Boolean(String(r.medicineId || '').trim()) ||
+    Boolean(String(r.batchNumber || '').trim())
+  if (hasText) return false
+  const qty = Number(r.quantity || 0)
+  return !Number.isFinite(qty) || qty === 0
+}
+
+function isDraftEmpty(draft) {
+  if (!draft) return true
+  const h = draft.header || {}
+  const headerHas =
+    Boolean(String(h.patientName || '').trim()) ||
+    Boolean(String(h.phone || '').trim()) ||
+    Boolean(String(h.doctorName || '').trim()) ||
+    Boolean(String(h.remarks || '').trim()) ||
+    Number(h.billDiscountPercent || 0) !== 0 ||
+    Number(h.paidAmount || 0) !== 0
+  if (headerHas) return false
+  const rs = Array.isArray(draft.rows) ? draft.rows : []
+  return rs.every((r) => isRowEmpty(r))
 }
 
 function lineTotals(r) {
@@ -97,6 +124,20 @@ export default function SalesEditPage() {
   const [batchLoading, setBatchLoading] = useState(false)
   const [batches, setBatches] = useState([])
   const [pickerOpen, setPickerOpen] = useState(false)
+
+  const draftKey = useMemo(
+    () =>
+      makeDraftKey({
+        kind: 'saleEditDraft',
+        tenantSlug: effectiveSlug || getTenantSlug(),
+        userId: user?.id,
+        extra: saleId || 'no-id',
+      }),
+    [effectiveSlug, user?.id, saleId],
+  )
+  const [draftState, setDraftState] = useState('none') // 'none' | 'available' | 'restored'
+  const [draftData, setDraftData] = useState(null)
+  const [reloadSeed, setReloadSeed] = useState(0)
 
   useEffect(() => {
     let mounted = true
@@ -159,7 +200,36 @@ export default function SalesEditPage() {
     return () => {
       mounted = false
     }
-  }, [saleId, token])
+  }, [saleId, token, reloadSeed])
+
+  // Check for a saved edit-draft once sale is loaded (do not auto-override server data).
+  useEffect(() => {
+    if (loadingSale) return
+    if (!draftKey) return
+    const d = loadDraft(draftKey)
+    if (!d || isDraftEmpty(d)) return
+    setDraftData(d)
+    setDraftState('available')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loadingSale, draftKey])
+
+  // Autosave local draft (debounced) while editing.
+  useEffect(() => {
+    if (!draftKey) return
+    if (!token || !user?.id) return
+    if (loadingSale) return
+    if (!canManage) return
+    if (saving) return
+
+    const t = window.setTimeout(() => {
+      const compactRows = Array.isArray(rows) ? rows.filter((r) => !isRowEmpty(r)) : []
+      const payload = { v: 1, updatedAt: Date.now(), header, rows: compactRows, activeRow }
+      if (isDraftEmpty(payload)) clearDraft(draftKey)
+      else saveDraft(draftKey, payload)
+    }, 800)
+
+    return () => window.clearTimeout(t)
+  }, [draftKey, token, user?.id, loadingSale, canManage, saving, header, rows, activeRow])
 
   function updateRow(index, patch) {
     setSuccess(false)
@@ -354,6 +424,7 @@ export default function SalesEditPage() {
         },
       })
 
+      clearDraft(draftKey)
       setSuccess(true)
       navigate(`${base}/sales/view`)
     } catch (err) {
@@ -404,6 +475,75 @@ export default function SalesEditPage() {
           {loadingSale ? (
             <div className="mt-6 rounded-3xl bg-white/5 p-6 text-sm text-slate-300 ring-1 ring-inset ring-white/10">
               Loading sale...
+            </div>
+          ) : null}
+
+          {!loadingSale && canManage && draftState !== 'none' ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-sky-500/10 p-3 text-sm text-sky-200 ring-1 ring-inset ring-sky-400/20">
+              <div>
+                {draftState === 'available' ? 'Unsaved draft found for this sale.' : 'Draft restored (auto-saved).'}{' '}
+                {draftData?.updatedAt ? (
+                  <span className="text-xs text-slate-300">
+                    (Last saved {new Date(draftData.updatedAt).toLocaleString()})
+                  </span>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                {draftState === 'available' ? (
+                  <button
+                    type="button"
+                    className="rounded-xl bg-white/5 px-3 py-2 text-xs ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                    onClick={() => {
+                      if (!draftData) return
+                      const ok = window.confirm('Restore the saved draft? This will overwrite the current form values.')
+                      if (!ok) return
+
+                      const nextHeader = {
+                        saleDate: String(draftData?.header?.saleDate || header.saleDate || isoToday()),
+                        paymentType: String(draftData?.header?.paymentType || header.paymentType || 'Cash'),
+                        paidAmount: Number(draftData?.header?.paidAmount || 0),
+                        paidTouched: true,
+                        billDiscountPercent: Number(draftData?.header?.billDiscountPercent || 0),
+                        patientName: String(draftData?.header?.patientName || ''),
+                        phone: String(draftData?.header?.phone || ''),
+                        doctorName: String(draftData?.header?.doctorName || ''),
+                        remarks: String(draftData?.header?.remarks || ''),
+                      }
+
+                      const nextRowsRaw = Array.isArray(draftData.rows) ? draftData.rows : []
+                      const nextRows = nextRowsRaw.map((r) => ({
+                        ...emptyRow(),
+                        ...r,
+                        unitsPerStrip: Math.max(1, Number(r?.unitsPerStrip || 1)),
+                        mrp: Number(r?.mrp || 0),
+                        saleRate: Number(r?.saleRate || 0),
+                        discountPercent: Number(r?.discountPercent || 0),
+                        finalPurchaseRate: Number(r?.finalPurchaseRate || 0),
+                        quantity: Number(r?.quantity || 0),
+                      }))
+                      if (!nextRows.length) nextRows.push(emptyRow())
+
+                      setHeader(nextHeader)
+                      setRows(nextRows)
+                      setActiveRow(Math.max(0, Math.min(Number(draftData.activeRow || 0), nextRows.length - 1)))
+                      setDraftState('restored')
+                    }}
+                  >
+                    Restore
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="rounded-xl bg-white/5 px-3 py-2 text-xs ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                  onClick={() => {
+                    clearDraft(draftKey)
+                    setDraftData(null)
+                    setDraftState('none')
+                  }}
+                >
+                  Discard
+                </button>
+              </div>
             </div>
           ) : null}
 
@@ -528,6 +668,21 @@ export default function SalesEditPage() {
                   </div>
 
                   <div className="flex items-center justify-end gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        const ok = window.confirm('Reset the form and clear any auto-saved draft?')
+                        if (!ok) return
+                        clearDraft(draftKey)
+                        setDraftData(null)
+                        setDraftState('none')
+                        setReloadSeed((n) => n + 1)
+                      }}
+                      disabled={saving}
+                    >
+                      Reset
+                    </Button>
                     <Button type="submit" disabled={saving}>
                       {saving ? 'Saving...' : 'Save changes'}
                     </Button>

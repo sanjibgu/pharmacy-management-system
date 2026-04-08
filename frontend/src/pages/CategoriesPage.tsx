@@ -31,6 +31,7 @@ type Category = {
   _id: string
   name: string
   fields?: CategoryField[]
+  uniqueFields?: string[]
   looseSaleAllowed?: boolean
   isDeleted?: boolean
 }
@@ -62,6 +63,13 @@ function draftFromField(f: CategoryField): CategoryFieldDraft {
 }
 
 function parseOptions(raw: string) {
+  return (raw || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+function parseUniqueFields(raw: string) {
   return (raw || '')
     .split(',')
     .map((s) => s.trim())
@@ -100,11 +108,13 @@ export default function CategoriesPage() {
 
   const [name, setName] = useState('')
   const [fields, setFields] = useState<CategoryFieldDraft[]>([])
+  const [uniqueFieldsRaw, setUniqueFieldsRaw] = useState('')
   const [looseSaleAllowed, setLooseSaleAllowed] = useState(false)
 
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [editingFields, setEditingFields] = useState<CategoryFieldDraft[]>([])
+  const [editingUniqueFieldsRaw, setEditingUniqueFieldsRaw] = useState('')
   const [editingLooseSaleAllowed, setEditingLooseSaleAllowed] = useState(false)
   const [manufacturersByCategory, setManufacturersByCategory] = useState<Record<string, Manufacturer[]>>({})
   const [addingManufacturerName, setAddingManufacturerName] = useState<Record<string, string>>({})
@@ -196,10 +206,11 @@ export default function CategoriesPage() {
         method: 'POST',
         token,
         tenant: false,
-        body: { name, fields: draftsToPayload(fields), looseSaleAllowed },
+        body: { name, fields: draftsToPayload(fields), uniqueFields: parseUniqueFields(uniqueFieldsRaw), looseSaleAllowed },
       })
       setName('')
       setFields([])
+      setUniqueFieldsRaw('')
       setLooseSaleAllowed(false)
       await load()
     } catch (err) {
@@ -218,11 +229,17 @@ export default function CategoriesPage() {
         method: 'PATCH',
         token,
         tenant: false,
-        body: { name: editingName, fields: draftsToPayload(editingFields), looseSaleAllowed: editingLooseSaleAllowed },
+        body: {
+          name: editingName,
+          fields: draftsToPayload(editingFields),
+          uniqueFields: parseUniqueFields(editingUniqueFieldsRaw),
+          looseSaleAllowed: editingLooseSaleAllowed,
+        },
       })
       setEditingId(null)
       setEditingName('')
       setEditingFields([])
+      setEditingUniqueFieldsRaw('')
       setEditingLooseSaleAllowed(false)
       await load()
     } catch (err) {
@@ -294,7 +311,16 @@ export default function CategoriesPage() {
                   <div className="text-sm font-semibold">Custom fields (optional)</div>
                   <div className="mt-0.5 text-xs text-slate-400">Example: Diaper → size (dropdown), packOf (number)</div>
                 </div>
-                <div className="flex items-end gap-2">
+                <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-end">
+                  <label className="grid gap-1 sm:w-72">
+                    <span className="text-[11px] font-medium text-slate-400">Unique fields (comma)</span>
+                    <input
+                      className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                      value={uniqueFieldsRaw}
+                      onChange={(e) => setUniqueFieldsRaw(e.target.value)}
+                      placeholder="size, packOf"
+                    />
+                  </label>
                   <label className="grid gap-1">
                     <span className="text-[11px] font-medium text-slate-400">Loose sale</span>
                     <select
@@ -480,7 +506,16 @@ export default function CategoriesPage() {
                         <div className="mt-3 rounded-2xl bg-black/20 p-3 ring-1 ring-inset ring-white/10">
                             <div className="flex items-center justify-between gap-2">
                               <div className="text-xs font-semibold text-slate-300">Custom fields</div>
-                              <div className="flex items-end gap-2">
+                              <div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-end">
+                                <label className="grid gap-1 sm:w-72">
+                                  <span className="text-[11px] font-medium text-slate-400">Unique fields (comma)</span>
+                                  <input
+                                    className="h-10 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10"
+                                    value={editingUniqueFieldsRaw}
+                                    onChange={(e) => setEditingUniqueFieldsRaw(e.target.value)}
+                                    placeholder="size, packOf"
+                                  />
+                                </label>
                                 <label className="grid gap-1">
                                   <span className="text-[11px] font-medium text-slate-400">Loose sale</span>
                                   <select
@@ -690,6 +725,7 @@ export default function CategoriesPage() {
                               setEditingId(null)
                               setEditingName('')
                               setEditingFields([])
+                              setEditingUniqueFieldsRaw('')
                               setEditingLooseSaleAllowed(false)
                             }}
                             disabled={saving}
@@ -709,6 +745,7 @@ export default function CategoriesPage() {
                               setEditingId(c._id)
                               setEditingName(c.name)
                               setEditingFields((c.fields || []).map((f) => draftFromField(f)))
+                              setEditingUniqueFieldsRaw((c.uniqueFields || []).join(', '))
                               setEditingLooseSaleAllowed(Boolean(c.looseSaleAllowed))
                               void loadManufacturers(c._id)
                             }}

@@ -16,6 +16,41 @@ import {
 } from '../services/purchaseService'
 import { getTenantSlug } from '../services/tenant'
 
+function isRowEmpty(r) {
+  if (!r) return true
+  const hasText =
+    Boolean(String(r.categoryName || '').trim()) ||
+    Boolean(String(r.manufacturerName || '').trim()) ||
+    Boolean(String(r.productName || '').trim()) ||
+    Boolean(String(r.medicineId || '').trim()) ||
+    Boolean(String(r.batchNumber || '').trim()) ||
+    Boolean(String(r.rackLocation || '').trim()) ||
+    Boolean(String(r.expiry || '').trim()) ||
+    Boolean(String(r.hsnCode || '').trim())
+  if (hasText) return false
+  const nums = [
+    Number(r.mrp || 0),
+    Number(r.saleRate || 0),
+    Number(r.quantity || 0),
+    Number(r.freeQuantity || 0),
+    Number(r.discountPercent || 0),
+    Number(r.gstPercent || 0),
+  ]
+  return nums.every((n) => !Number.isFinite(n) || n === 0)
+}
+
+function isPurchaseDraftEmpty(draft) {
+  if (!draft) return true
+  const h = draft.header || {}
+  const headerHas =
+    Boolean(String(h.supplierId || '').trim()) ||
+    Boolean(String(h.invoiceNumber || '').trim()) ||
+    Boolean(String(h.remarks || '').trim())
+  if (headerHas) return false
+  const rs = Array.isArray(draft.rows) ? draft.rows : []
+  return rs.every((r) => isRowEmpty(r))
+}
+
 function isoToday() {
   return new Date().toISOString().slice(0, 10)
 }
@@ -248,6 +283,115 @@ export default function PurchasePage() {
   const [batchPopoverOpen, setBatchPopoverOpen] = useState(false)
   const batchMoreBtnRef = useRef(null)
   const [batchPopoverPos, setBatchPopoverPos] = useState({ top: 0, left: 0, width: 520 })
+
+  const draftKey = useMemo(() => {
+    const slug = effectiveSlug || getTenantSlug() || 'no-tenant'
+    const uid = user?.id || 'no-user'
+    return `purchaseDraft:v1:${slug}:${uid}`
+  }, [effectiveSlug, user?.id])
+
+  const [draftStatus, setDraftStatus] = useState(null) // 'restored' | null
+
+  const clearDraft = useCallback(() => {
+    try {
+      localStorage.removeItem(draftKey)
+    } catch {
+      // ignore
+    }
+  }, [draftKey])
+
+  // Restore draft (if any) when page opens.
+  useEffect(() => {
+    if (!draftKey) return
+    try {
+      const raw = localStorage.getItem(draftKey)
+      if (!raw) return
+      const parsed = JSON.parse(raw)
+      if (!parsed || typeof parsed !== 'object') return
+      const updatedAt = Number(parsed.updatedAt || 0)
+      // Ignore very old drafts
+      const maxAgeMs = 1000 * 60 * 60 * 24 * 7
+      if (updatedAt && Date.now() - updatedAt > maxAgeMs) {
+        localStorage.removeItem(draftKey)
+        return
+      }
+
+      if (isPurchaseDraftEmpty(parsed)) {
+        localStorage.removeItem(draftKey)
+        return
+      }
+
+      // Only auto-restore if current form is still empty (new session).
+      const currentEmpty = isPurchaseDraftEmpty({ header, rows })
+      if (!currentEmpty) return
+
+      const nextHeader = {
+        supplierId: String(parsed?.header?.supplierId || ''),
+        invoiceNumber: String(parsed?.header?.invoiceNumber || ''),
+        invoiceDate: String(parsed?.header?.invoiceDate || isoToday()),
+        purchaseDate: String(parsed?.header?.purchaseDate || isoToday()),
+        purchaseType: String(parsed?.header?.purchaseType || 'Cash'),
+        paidAmount: Number(parsed?.header?.paidAmount || 0),
+        paidAmountTouched: Boolean(parsed?.header?.paidAmountTouched),
+        dueDate: String(parsed?.header?.dueDate || ''),
+        remarks: String(parsed?.header?.remarks || ''),
+      }
+
+      const nextRowsRaw = Array.isArray(parsed.rows) ? parsed.rows : []
+      const nextRows = nextRowsRaw.map((r) => ({
+        ...emptyRow(),
+        ...r,
+        mrp: Number(r?.mrp || 0),
+        saleRate: Number(r?.saleRate || 0),
+        saleRateTouched: Boolean(r?.saleRateTouched),
+        quantity: Number(r?.quantity || 0),
+        freeQuantity: Number(r?.freeQuantity || 0),
+        discountPercent: Number(r?.discountPercent || 0),
+        gstPercent: Number(r?.gstPercent || 0),
+      }))
+
+      while (nextRows.length < 5) nextRows.push(emptyRow())
+
+      setHeader(nextHeader)
+      setRows(nextRows)
+      const ar = Math.max(0, Math.min(Number(parsed.activeRow || 0), nextRows.length - 1))
+      setActiveRow(ar)
+      setDraftStatus('restored')
+    } catch {
+      // ignore invalid draft
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey])
+
+  // Autosave draft locally (no server requests).
+  useEffect(() => {
+    if (!draftKey) return
+    if (!token || !user?.id) return
+    if (saving) return
+
+    const t = window.setTimeout(() => {
+      try {
+        const compactRows = Array.isArray(rows) ? rows.filter((r) => !isRowEmpty(r)) : []
+        const payload = {
+          v: 1,
+          updatedAt: Date.now(),
+          header,
+          rows: compactRows,
+          activeRow,
+        }
+
+        if (isPurchaseDraftEmpty(payload)) {
+          localStorage.removeItem(draftKey)
+        } else {
+          localStorage.setItem(draftKey, JSON.stringify(payload))
+        }
+      } catch {
+        // ignore storage quota errors etc
+      }
+    }, 800)
+
+    return () => window.clearTimeout(t)
+  }, [draftKey, token, user?.id, saving, header, rows, activeRow])
 
   const applyBatchToRow = useCallback(
     (rowIndex, batch, { setQtyIfEmpty = false } = {}) => {
@@ -785,6 +929,7 @@ export default function PurchasePage() {
   }
 
   function cancel() {
+    clearDraft()
     setHeader({
       supplierId: '',
       invoiceNumber: '',
@@ -800,6 +945,7 @@ export default function PurchasePage() {
     setActiveRow(0)
     setSuccess(false)
     setError(null)
+    setDraftStatus(null)
   }
 
   async function submit(e) {
@@ -884,6 +1030,7 @@ export default function PurchasePage() {
         items,
       })
 
+      clearDraft()
       setSuccess(true)
       cancel()
     } catch (e) {
@@ -948,6 +1095,19 @@ export default function PurchasePage() {
           {success ? (
             <div className="mt-4 rounded-2xl bg-emerald-500/10 p-4 text-sm text-emerald-200 ring-1 ring-inset ring-emerald-400/20">
               Purchase saved. Stock updated batch-wise.
+            </div>
+          ) : null}
+
+          {draftStatus === 'restored' ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-sky-500/10 p-3 text-sm text-sky-200 ring-1 ring-inset ring-sky-400/20">
+              <div>Draft restored (auto-saved).</div>
+              <button
+                type="button"
+                className="rounded-xl bg-white/5 px-3 py-2 text-xs ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                onClick={() => cancel()}
+              >
+                Discard
+              </button>
             </div>
           ) : null}
 
@@ -1642,6 +1802,18 @@ export default function PurchasePage() {
                 <div className="flex shrink-0 items-center gap-2">
                   <Button type="button" variant="secondary" onClick={() => window.print()}>
                     Print
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => {
+                      const ok = window.confirm('Reset the form and clear any auto-saved draft?')
+                      if (!ok) return
+                      cancel()
+                    }}
+                    disabled={saving}
+                  >
+                    Reset
                   </Button>
                   <Button type="button" variant="secondary" onClick={cancel}>
                     Cancel

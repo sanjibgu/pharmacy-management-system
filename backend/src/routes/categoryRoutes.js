@@ -38,6 +38,10 @@ const fieldSchema = z
 const upsertSchema = z.object({
   name: z.string().min(2).max(120),
   fields: z.array(fieldSchema).optional().default([]),
+  uniqueFields: z
+    .array(z.string().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/i, 'Invalid unique field key'))
+    .optional()
+    .default([]),
   looseSaleAllowed: z.coerce.boolean().optional().default(false),
 })
 

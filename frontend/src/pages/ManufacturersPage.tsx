@@ -5,6 +5,7 @@ import SiteHeader from '../components/SiteHeader'
 import { useAuth } from '../context/AuthContext'
 import { apiFetch } from '../services/api'
 import { getTenantSlug } from '../services/tenant'
+import { clearDraft, loadDraft, makeDraftKey, saveDraft } from '../services/draftStorage'
 
 type Category = {
   _id: string
@@ -45,6 +46,8 @@ export default function ManufacturersPage() {
   const [filterActive, setFilterActive] = useState<'all' | 'active' | 'inactive'>('all')
   const [sortKey, setSortKey] = useState<'name' | 'categories' | 'isActive'>('name')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [pageSize, setPageSize] = useState<5 | 10 | 20>(10)
+  const [page, setPage] = useState(1)
 
   const [name, setName] = useState('')
   const [categoryIds, setCategoryIds] = useState<string[]>([])
@@ -55,6 +58,44 @@ export default function ManufacturersPage() {
   const [editing, setEditing] = useState<Manufacturer | null>(null)
   const [editName, setEditName] = useState('')
   const [editCategoryIds, setEditCategoryIds] = useState<string[]>([])
+
+  const draftKey = useMemo(
+    () => makeDraftKey({ kind: 'manufacturerDraft', tenantSlug: effectiveSlug || getTenantSlug(), userId: user?.id }),
+    [effectiveSlug, user?.id],
+  )
+  const [draftRestored, setDraftRestored] = useState(false)
+
+  function isDraftEmpty(d: any) {
+    if (!d) return true
+    if (String(d.name || '').trim()) return false
+    const ids = Array.isArray(d.categoryIds) ? d.categoryIds : []
+    return ids.length === 0
+  }
+
+  useEffect(() => {
+    if (!draftKey) return
+    const draft = loadDraft<any>(draftKey)
+    if (!draft || isDraftEmpty(draft)) return
+    const currentEmpty = isDraftEmpty({ name, categoryIds })
+    if (!currentEmpty) return
+    setName(String(draft.name || ''))
+    setCategoryIds(Array.isArray(draft.categoryIds) ? draft.categoryIds : [])
+    setDraftRestored(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey])
+
+  useEffect(() => {
+    if (!draftKey) return
+    if (!token || !user?.id) return
+    if (!canManage) return
+
+    const t = window.setTimeout(() => {
+      const payload = { v: 1, updatedAt: Date.now(), name, categoryIds }
+      if (isDraftEmpty(payload)) clearDraft(draftKey)
+      else saveDraft(draftKey, payload)
+    }, 800)
+    return () => window.clearTimeout(t)
+  }, [draftKey, token, user?.id, canManage, name, categoryIds])
 
   const categoriesById = useMemo(() => {
     const m = new Map<string, string>()
@@ -122,6 +163,25 @@ export default function ManufacturersPage() {
     })
   }, [items, searchText, categoriesById, filterCategoryId, filterSource, filterActive, sortKey, sortDir])
 
+  useEffect(() => {
+    setPage(1)
+  }, [searchText, filterCategoryId, filterSource, filterActive, sortKey, sortDir])
+
+  const paged = useMemo(() => {
+    const total = filtered.length
+    const totalPages = Math.max(1, Math.ceil(total / pageSize))
+    const safePage = Math.min(page, totalPages)
+    const start = (safePage - 1) * pageSize
+    return {
+      total,
+      totalPages,
+      page: safePage,
+      start,
+      end: Math.min(total, start + pageSize),
+      items: filtered.slice(start, start + pageSize),
+    }
+  }, [filtered, pageSize, page])
+
   function toggleSort(next: typeof sortKey) {
     setSortKey((cur) => {
       if (cur !== next) {
@@ -155,6 +215,8 @@ export default function ManufacturersPage() {
       })
       setName('')
       setCategoryIds([])
+      clearDraft(draftKey)
+      setDraftRestored(false)
       await loadAll()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create manufacturer')
@@ -305,6 +367,24 @@ export default function ManufacturersPage() {
             </div>
           ) : null}
 
+          {draftRestored ? (
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl bg-sky-500/10 p-3 text-sm text-sky-200 ring-1 ring-inset ring-sky-400/20">
+              <div>Draft restored (auto-saved).</div>
+              <button
+                type="button"
+                className="rounded-xl bg-white/5 px-3 py-2 text-xs ring-1 ring-inset ring-white/10 hover:bg-white/10"
+                onClick={() => {
+                  clearDraft(draftKey)
+                  setDraftRestored(false)
+                  setName('')
+                  setCategoryIds([])
+                }}
+              >
+                Discard
+              </button>
+            </div>
+          ) : null}
+
           {canManage ? (
             <form onSubmit={create} className="mt-4 rounded-3xl bg-white/5 p-4 ring-1 ring-inset ring-white/10">
               <div className="text-sm font-semibold">Add manufacturer</div>
@@ -340,7 +420,22 @@ export default function ManufacturersPage() {
                   </select>
                 </label>
               </div>
-              <div className="mt-3 flex justify-end">
+              <div className="mt-3 flex justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    const ok = window.confirm('Reset the form and clear any auto-saved draft?')
+                    if (!ok) return
+                    clearDraft(draftKey)
+                    setDraftRestored(false)
+                    setName('')
+                    setCategoryIds([])
+                  }}
+                  disabled={saving}
+                >
+                  Reset
+                </Button>
                 <Button type="submit" disabled={saving}>
                   {saving ? 'Saving...' : 'Create'}
                 </Button>
@@ -414,6 +509,18 @@ export default function ManufacturersPage() {
                   <option value="active">Active</option>
                   <option value="inactive">Inactive</option>
                 </select>
+                <label className="flex items-center justify-between gap-2 rounded-xl bg-slate-950/40 px-3 text-sm ring-1 ring-inset ring-white/10 sm:h-10 sm:w-40">
+                  <span className="text-xs text-slate-400">Show</span>
+                  <select
+                    className="h-9 bg-transparent text-sm text-slate-200 outline-none"
+                    value={pageSize}
+                    onChange={(e) => setPageSize(Number(e.target.value) as 5 | 10 | 20)}
+                  >
+                    <option value={5}>5</option>
+                    <option value={10}>10</option>
+                    <option value={20}>20</option>
+                  </select>
+                </label>
               </div>
             </div>
             {loading ? (
@@ -423,7 +530,7 @@ export default function ManufacturersPage() {
             ) : (
               <>
                 <div className="mt-4 space-y-3 md:hidden">
-                  {filtered.map((m) => (
+                  {paged.items.map((m) => (
                     <div
                       key={m._id}
                       className={`rounded-2xl bg-slate-950/40 p-4 ring-1 ring-inset ring-white/10 ${m.isActive === false ? 'opacity-60' : ''}`}
@@ -500,7 +607,7 @@ export default function ManufacturersPage() {
                     </tr>
                   </thead>
                   <tbody className="text-slate-200">
-                    {filtered.map((m) => (
+                  {paged.items.map((m) => (
                       <tr
                         key={m._id}
                         className={`border-t border-white/10 ${m.isActive === false ? 'opacity-60' : ''}`}
@@ -551,6 +658,36 @@ export default function ManufacturersPage() {
                     ))}
                   </tbody>
                 </table>
+                </div>
+
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+                  <div>
+                    Showing <span className="text-slate-200">{paged.total ? paged.start + 1 : 0}</span>â€“
+                    <span className="text-slate-200">{paged.end}</span> of{' '}
+                    <span className="text-slate-200">{paged.total}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      disabled={paged.page <= 1 || saving}
+                    >
+                      Prev
+                    </Button>
+                    <div>
+                      Page <span className="text-slate-200">{paged.page}</span> /{' '}
+                      <span className="text-slate-200">{paged.totalPages}</span>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      onClick={() => setPage((p) => Math.min(paged.totalPages, p + 1))}
+                      disabled={paged.page >= paged.totalPages || saving}
+                    >
+                      Next
+                    </Button>
+                  </div>
                 </div>
               </>
             )}

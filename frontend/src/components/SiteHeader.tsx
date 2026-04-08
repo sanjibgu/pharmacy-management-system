@@ -322,6 +322,13 @@ export default function SiteHeader() {
                 <div className="hidden text-xs text-slate-400 md:block">
                   {user?.email}
                 </div>
+                <LinkButton
+                  to={isSuperAdmin ? '/superadmin/change-password' : `${base}/change-password`}
+                  variant="secondary"
+                  className="hidden md:inline-flex"
+                >
+                  Change password
+                </LinkButton>
                 <Button variant="secondary" onClick={logout}>
                   Logout
                 </Button>
@@ -571,7 +578,21 @@ export default function SiteHeader() {
 
                 <div className="pt-2">
                   <div className="px-2 text-xs text-slate-500">{user?.email}</div>
-                  <div className="mt-2">
+                  <div className="mt-2 grid gap-2">
+                    <NavLink
+                      to={`${base}/change-password`}
+                      end
+                      className={({ isActive }) =>
+                        [
+                          'block rounded-xl px-3 py-2 text-sm ring-1 ring-inset transition-colors',
+                          isActive
+                            ? 'bg-white/10 text-sky-200 ring-white/15'
+                            : 'bg-transparent text-slate-200 ring-white/10 hover:bg-white/5',
+                        ].join(' ')
+                      }
+                    >
+                      Change password
+                    </NavLink>
                     <Button variant="secondary" onClick={logout}>
                       Logout
                     </Button>
@@ -635,6 +656,20 @@ export default function SiteHeader() {
                   end
                 >
                   Categories
+                </NavLink>
+                <NavLink
+                  className={({ isActive }) =>
+                    [
+                      'block rounded-xl px-3 py-2 text-sm ring-1 ring-inset transition-colors',
+                      isActive
+                        ? 'bg-white/10 text-sky-200 ring-white/15'
+                        : 'bg-transparent text-slate-200 ring-white/10 hover:bg-white/5',
+                    ].join(' ')
+                  }
+                  to="/superadmin/change-password"
+                  end
+                >
+                  Change password
                 </NavLink>
 
                 <div className="pt-3">
